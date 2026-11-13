@@ -658,8 +658,12 @@ export class VibeAgent implements Agent {
       contentBlocks.push({ type: 'reasoning', text: this.assistantReasoning })
     }
     contentBlocks.push({ type: 'text', text: this.assistantText })
-    const sourceProvider = this.options.provider ?? 'mistral'
-    const sourceModel = this.options.model ?? ''
+    // The message carries the route the model answered with. The durable
+    // facade knows the selection the session recorded; the live options are
+    // the fallback for a session that never recorded one.
+    const selection = this.model.current()
+    const sourceProvider = selection?.provider ?? this.options.provider ?? 'mistral'
+    const sourceModel = selection?.model ?? this.options.model ?? ''
     const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
     const committed = this.session.append(
       'assistant/message',
