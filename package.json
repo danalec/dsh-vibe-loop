@@ -1,0 +1,89 @@
+{
+  "name": "dsh-vibe-agent",
+  "version": "0.1.0",
+  "description": "Run the Mistral Vibe agent (vibe-acp, Agent Client Protocol) as the agent loop inside DeepSeek Harness (@deepseek-ai/dsh): drive vibe-acp from the official DSH web UI, with the session log, hooks and presets unchanged.",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test --test-timeout=30000 \"test/*.test.mjs\"",
+    "lint": "eslint src test eslint.config.js"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-session-persistence": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@eslint/js": "^10.0.0",
+    "@types/node": "^26.2.0",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.72.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.1.0",
+    "@deepseek-ai/dsh-agent": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-scope": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-session-persistence": ">=0.2.2-rc.3 <0.3.0",
+    "@deepseek-ai/dsh-session-projection": ">=0.2.2-rc.3 <0.3.0"
+  },
+  "overrides": {
+    "@deepseek-ai/dsh-*": "0.2.2-rc.3"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "license": "MIT OR Apache-2.0",
+  "types": "dist/index.d.ts",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-agent",
+    "mistral",
+    "mistral-vibe",
+    "vibe",
+    "vibe-acp",
+    "acp",
+    "agent-client-protocol",
+    "agent-loop",
+    "coding-agent",
+    "harness",
+    "cordis",
+    "agent"
+  ],
+  "author": "Micheleww",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danalec/dsh-vibe-agent.git"
+  },
+  "homepage": "https://github.com/danalec/dsh-vibe-agent#readme",
+  "bugs": "https://github.com/danalec/dsh-vibe-agent/issues"
+}
