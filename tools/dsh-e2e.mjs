@@ -91,7 +91,7 @@ out(`model: ${JSON.stringify(handle.agent.model.current())}`)
 handle.agent.followup({
   id: SessionId(`msg-${Date.now().toString(36)}`),
   role: 'user',
-  content: [{ type: 'text', text: real ? 'Reply with exactly: dsh-vibe-e2e-ok' : 'hello' }],
+  content: [{ type: 'text', text: real ? 'Reply with exactly: dsh-vibe-e2e-ok and use a tool' : 'hello tool' }],
   source: { kind: 'user' },
 })
 
@@ -150,7 +150,7 @@ out(readFileSync(sidecar, 'utf8').trim())
 resumed.agent.followup({
   id: SessionId(`msg2-${Date.now().toString(36)}`),
   role: 'user',
-  content: [{ type: 'text', text: real ? 'Reply with exactly: dsh-vibe-e2e-resumed' : 'hello again' }],
+  content: [{ type: 'text', text: real ? 'Reply with exactly: dsh-vibe-e2e-resumed and use a tool' : 'hello again tool' }],
   source: { kind: 'user' },
 })
 await resumed.agent.whenIdle()
@@ -164,6 +164,13 @@ for (const event of resumed.agent.session.snapshotEvents()) {
   out(`  ${event.seq} ${event.type} ${summary}`)
 }
 await resumed.dispose()
+
+// Reopening the session validates the stored log end to end: a tool call
+// that no assistant message advertised, a message whose content disagrees
+// with its own stream, a gap in the sequence — the read refuses all of them.
+const reopened = await ctx.agents.resume({ resumeSessionId: id })
+out(`reopened: ${String(reopened.agent.id)} | events: ${reopened.agent.session.snapshotEvents().length}`)
+await reopened.dispose()
 
 // The store is the ground truth. A resumed session that appends ahead of
 // the store's cursor is refused with "append seq mismatch", and that

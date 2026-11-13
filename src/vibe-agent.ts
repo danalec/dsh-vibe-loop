@@ -37,6 +37,8 @@ import {
   AssistantStreamAccumulator,
   createAssistantMessage,
   createToolResultMessage,
+  BlockAssembler,
+  expandAssistantStream,
   LlmAttemptId,
   ToolCallId,
   type AssistantStreamRecord,
@@ -144,6 +146,24 @@ function acpText(content: unknown): string {
 }
 
 /** Map Vibe's token report onto DSH's token accounting. */
+/** The stream index the assistant's text block occupies. */
+const TEXT_BLOCK_INDEX = 1
+/** The stream index the assistant's reasoning block occupies. */
+const REASONING_BLOCK_INDEX = 0
+/** The stream index the first tool call block occupies. */
+const FIRST_TOOL_BLOCK_INDEX = 2
+
+/**
+ * A tool event that waits for the assistant message advertising it.
+ *
+ * DSH's session format wants every tool call advertised by an assistant
+ * message before the call itself. Vibe reports the call while its answer is
+ * still streaming, so the call and its result wait for that message.
+ */
+type PendingToolEvent =
+  | { kind: 'call'; callId: ToolCallId; name: string; arguments: string }
+  | { kind: 'result'; callId: ToolCallId; message: ReturnType<typeof createToolResultMessage> }
+
 function convertUsage(usage: unknown): TokenUsage | undefined {
   if (!usage || typeof usage !== 'object') return undefined
   const record = usage as {
@@ -260,6 +280,15 @@ export class VibeAgent implements Agent {
   private readonly toolCallNames = new Map<string, string>()
   /** Tool calls announced but not yet finished. */
   private readonly pendingToolCalls = new Map<string, { name: string, arguments: string }>()
+  /**
+   * Tool events that wait for the assistant message advertising them.
+   *
+   * The session format refuses a tool call nobody advertised, so the call
+   * and its result are written after the message that carries the call.
+   */
+  private pendingToolEvents: PendingToolEvent[] = []
+  /** The stream index the next tool call block occupies. */
+  private toolBlockIndex = FIRST_TOOL_BLOCK_INDEX
 
   /**
    * Messages already delivered to Vibe whose `user/message` event still has
@@ -645,7 +674,9 @@ export class VibeAgent implements Agent {
     blocks.push(...content)
     const result = await this.acp.prompt(blocks)    // The prompt may have produced nothing at all (a cancelled turn): the
     // assistant message is then absent, and DSH records the attempt instead.
-    if (this.assistantText === '' && this.assistantReasoning === '') {
+    // A turn that only ran tools still has to carry a message: the format
+    // wants every tool call advertised by an assistant message.
+    if (this.assistantText === '' && this.assistantReasoning === '' && this.pendingToolEvents.length === 0) {
       const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
       if (stream.length > 0) {
         this.session.append('assistant/attempt', { turn, step, stream })
@@ -653,18 +684,19 @@ export class VibeAgent implements Agent {
       return
     }
     const usage = convertUsage(result.usage)
-    const contentBlocks: ContentBlock[] = []
-    if (this.assistantReasoning !== '') {
-      contentBlocks.push({ type: 'reasoning', text: this.assistantReasoning })
-    }
-    contentBlocks.push({ type: 'text', text: this.assistantText })
+    // The message's content is the stream's own assembly: the format checks
+    // the two against each other when the log is read back, and the tool
+    // calls the answer announced are part of that assembly.
+    const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
+    const assembler = new BlockAssembler()
+    for (const member of expandAssistantStream(stream)) assembler.push(member.chunk)
+    const contentBlocks: ContentBlock[] = assembler.blocks()
     // The message carries the route the model answered with. The durable
     // facade knows the selection the session recorded; the live options are
     // the fallback for a session that never recorded one.
     const selection = this.model.current()
     const sourceProvider = selection?.provider ?? this.options.provider ?? 'mistral'
     const sourceModel = selection?.model ?? this.options.model ?? ''
-    const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
     const committed = this.session.append(
       'assistant/message',
       {
@@ -679,6 +711,7 @@ export class VibeAgent implements Agent {
       },
       { surfaceOp: 'append' },
     )
+    this.flushPendingToolEvents()
     const attemptId = this.attemptId
     if (attemptId !== undefined) {
       this.dispatch.emit('agent/assistant-stream', {
@@ -690,6 +723,38 @@ export class VibeAgent implements Agent {
           outcome: { kind: 'committed', eventType: 'assistant/message', seq: committed.seq },
         },
       })
+    }
+  }
+
+  /**
+   * Write the tool calls and their results.
+   *
+   * The format refuses a tool call that no assistant message advertised, so
+   * the events wait for that message and are written right after it.
+   */
+  private flushPendingToolEvents(): void {
+    if (this.pendingToolEvents.length === 0) return
+    const events = this.pendingToolEvents.splice(0)
+    const callSeqs = new Map<string, SessionSeq>()
+    for (const event of events) {
+      if (event.kind === 'call') {
+        const callEvent = this.session.append('tool/call', {
+          turn: this.turn,
+          step: this.step,
+          callId: event.callId,
+          name: event.name,
+          arguments: event.arguments,
+        })
+        callSeqs.set(String(event.callId), callEvent.seq)
+        this.toolCallSeqs.set(String(event.callId), callEvent.seq)
+        continue
+      }
+      const callSeq = callSeqs.get(String(event.callId))
+      this.session.append(
+        'tool/result',
+        { turn: this.turn, step: this.step, message: event.message },
+        { surfaceOp: 'append', ...(callSeq === undefined ? {} : { sourceEventSeqs: [callSeq] }) },
+      )
     }
   }
 
@@ -739,7 +804,7 @@ export class VibeAgent implements Agent {
         if (text === '') return
         this.assistantText += text
         this.startAttempt()
-        this.appendChunk({ type: 'text-delta', index: 0, text })
+        this.appendChunk({ type: 'text-delta', index: TEXT_BLOCK_INDEX, text })
         return
       }
       case 'agent_thought_chunk': {
@@ -747,7 +812,7 @@ export class VibeAgent implements Agent {
         if (text === '') return
         this.assistantReasoning += text
         this.startAttempt()
-        this.appendChunk({ type: 'reasoning-delta', index: 0, text })
+        this.appendChunk({ type: 'reasoning-delta', index: REASONING_BLOCK_INDEX, text })
         return
       }
       case 'tool_call': {
@@ -771,14 +836,19 @@ export class VibeAgent implements Agent {
         const args = raw.rawInput ?? raw.rawOutput ?? {}
         const argumentsText = typeof args === 'string' ? args : JSON.stringify(args)
         this.openStep()
-        const callEvent = this.session.append('tool/call', {
-          turn: this.turn,
-          step: this.step,
-          callId: ToolCallId(id),
+        // The call joins the assistant's stream: the message that carries the
+        // answer advertises the call, and the format wants the call itself
+        // only after that message.
+        const callId = ToolCallId(id)
+        this.appendChunk({
+          type: 'tool-call-delta',
+          index: this.toolBlockIndex,
+          id: callId,
           name,
-          arguments: argumentsText,
+          argumentsDelta: argumentsText,
         })
-        this.toolCallSeqs.set(id, callEvent.seq)
+        this.toolBlockIndex += 1
+        this.pendingToolEvents.push({ kind: 'call', callId, name, arguments: argumentsText })
         this.toolCallNames.set(id, name)
         this.pendingToolCalls.set(id, { name, arguments: argumentsText })
         return
@@ -801,12 +871,7 @@ export class VibeAgent implements Agent {
           content: blocks,
           isError: status === 'failed',
         })
-        const callSeq = this.toolCallSeqs.get(id)
-        this.session.append(
-          'tool/result',
-          { turn: this.turn, step: this.step, message },
-          { surfaceOp: 'append', ...(callSeq === undefined ? {} : { sourceEventSeqs: [callSeq] }) },
-        )
+        this.pendingToolEvents.push({ kind: 'result', callId, message })
         this.pendingToolCalls.delete(id)
         return
       }
