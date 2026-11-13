@@ -35,6 +35,9 @@
  * ```
  */
 
+import { appendFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PiAgentFactory, registerModelSelectionProjection as registerPiProjection } from 'dsh-pi-loop'
 import { VibeAgentFactory, registerModelSelectionProjection as registerVibeProjection } from 'dsh-vibe-agent'
 
@@ -81,16 +84,32 @@ async function readPreset(ctx, sessionId) {
   }
 }
 
+/** Name of the diagnostics file inside the platform temp directory. */
+export const DEBUG_LOG_FILE = 'dsh-vibe-agent.log'
+
 export function apply(ctx, config) {
   const presets = config?.presets ?? {}
+  // The router is the only part of the stack that knows which engine a
+  // session runs on, so its decisions are the ones worth reading. With
+  // `debug` on they land in the same diagnostics file the engines use.
+  const debug = config?.debug === true
+  const logFile = join(tmpdir(), DEBUG_LOG_FILE)
+  const trace = (line) => {
+    if (!debug) return
+    try {
+      appendFileSync(logFile, `${new Date().toISOString()} [router] ${line}
+`)
+    } catch { /* diagnostics must never break the plugin */ }
+  }
+  const logger = debug ? (line) => trace(line) : undefined
   const fallback = config?.default === 'pi' ? 'pi' : 'vibe'
   const pi = new PiAgentFactory({
     piPath: config?.pi?.piPath,
     cwd: config?.pi?.cwd,
     model: config?.pi?.model,
     pinModel: config?.pi?.pinModel === true,
-    logger: config?.logger,
-    trace: config?.trace,
+    logger,
+    trace,
   }, ctx)
   const vibe = new VibeAgentFactory({
     vibePath: config?.vibe?.vibePath,
@@ -99,15 +118,15 @@ export function apply(ctx, config) {
     pinModel: config?.vibe?.pinModel === true,
     permission: config?.vibe?.permission,
     mode: config?.vibe?.mode,
-    logger: config?.logger,
-    trace: config?.trace,
+    logger,
+    trace,
   }, ctx)
 
   const factory = {
     async createAgent(ownerCtx, options) {
       const preset = options?.meta?.agentPreset
       const engine = resolveEngine(preset, presets, fallback)
-      ctx.logger.info(`loop-router: session "${String(options?.sessionId)}" uses the ${engine} engine (preset ${String(preset)})`)
+      trace(`session "${String(options?.sessionId)}" uses the ${engine} engine (preset ${String(preset)})`)
       return engine === 'pi'
         ? pi.createAgent(ownerCtx, options)
         : vibe.createAgent(ownerCtx, options)
@@ -115,7 +134,7 @@ export function apply(ctx, config) {
     async resume(ownerCtx, options) {
       const preset = await readPreset(ctx, options?.resumeSessionId)
       const engine = resolveEngine(preset, presets, fallback)
-      ctx.logger.info(`loop-router: session "${String(options?.resumeSessionId)}" resumes on the ${engine} engine (preset ${String(preset)})`)
+      trace(`session "${String(options?.resumeSessionId)}" resumes on the ${engine} engine (preset ${String(preset)})`)
       return engine === 'pi'
         ? pi.resume(ownerCtx, options)
         : vibe.resume(ownerCtx, options)
@@ -128,6 +147,6 @@ export function apply(ctx, config) {
   void registerVibeProjection(ctx)
 
   const dispose = ctx.agents.setFactory(factory)
-  ctx.logger.info(`loop-router: registered (presets ${Object.keys(presets).join(', ') || 'none'}; default ${fallback})`)
+  trace(`registered (presets ${Object.keys(presets).join(', ') || 'none'}; default ${fallback})`)
   return dispose
 }
