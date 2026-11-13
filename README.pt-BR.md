@@ -68,6 +68,56 @@ aproximação reconstruída.
   continua a partir da história em vez de começar às cegas, e o diagnóstico
   diz qual caminho foi tomado (`session] loaded` vs `session] new`).
 
+## Subagents no Vibe
+
+O Vibe também é um motor delegável: cada run aceito abre um `vibe-acp` novo,
+cria uma sessão no workspace de quem delegou, manda a tarefa como um prompt e
+devolve a resposta final.
+
+```yaml
+- insert:
+    - id: subagent-vibe
+      name: 'dsh-vibe-agent/subagent'
+      config:
+        providerName: vibe
+        vibePath: 'vibe-acp'
+        model: 'mistral-large-4'
+        timeoutMs: 600000
+
+- insert:
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: vibe
+        toolName: subagent
+        backgroundMode: one-shot
+        maxDepth: 'provider-managed'
+```
+
+A criança é um Vibe puro: system prompt, tools e skills próprios. Nada da conversa, persona ou superfície de tools do pai atravessa a fronteira.
+
+## Dois motores no mesmo profile
+
+O DSH tem um único slot de agent-factory, então dois plugins de motor não podem conduzir sessão ao mesmo tempo. A forma de rodar os dois é um **roteador**: ele ocupa o slot e delega por sessão, e o **preset de agente** da sessão decide qual motor roda.
+
+O preset é o registro durável da escolha do próprio DSH — ele fica no header da sessão (`agentPreset`), no log (`agent-preset/selected`) e na projeção `agentPreset`. Uma sessão retomada volta no motor em que foi criada, mesmo que a configuração tenha mudado.
+
+`profile/loop-router.mjs` é esse roteador. Ele é um arquivo comum (e não um pacote) porque importa os dois motores, e um arquivo dentro do profile resolve os dois pelo `node_modules` do profile (onde os dois plugins são linkados):
+
+```yaml
+# ~/.dsh/profiles/desktop/dsh/loop-router.mjs  ->  importa dsh-pi-loop e dsh-vibe-agent
+- insert:
+    - id: loop-router
+      name: 'file:///C:/Users/danalec/.dsh/profiles/desktop/dsh/loop-router.mjs'
+      config:
+        presets:
+          coding: pi          # coding pesado -> loop do Pi
+          coding-leve: vibe   # coding leve -> loop do Vibe
+        default: vibe
+```
+
+Os próprios presets montam a ferramenta de delegação que roda o *outro* motor em background — esse é o caminho em paralelo: a sessão de um loop passa trabalho para o outro enquanto continua.
+
 ## Compatibilidade
 
 O plugin implementa a API de agente do DSH **0.2**, desenvolvido e testado

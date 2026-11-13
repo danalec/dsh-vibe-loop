@@ -83,6 +83,115 @@ model keeps the context it had, not a rebuilt approximation of it.
   blind, and the diagnostics say which path was taken (`session] loaded` vs
   `session] new`).
 
+## Subagents on Vibe
+
+The Vibe agent is also a delegable engine: each accepted run spawns a fresh
+`vibe-acp`, opens a session in the delegating session's workspace, sends the
+task as one prompt and returns the final answer.
+
+```yaml
+- insert:
+    - id: subagent-vibe
+      name: 'dsh-vibe-agent/subagent'
+      config:
+        providerName: vibe
+        vibePath: 'vibe-acp'
+        model: 'mistral-large-4'
+        timeoutMs: 600000
+
+- insert:
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: vibe          # 'spawn'/'fork' for DSH-native children
+        toolName: subagent
+        backgroundMode: one-shot
+        maxDepth: 'provider-managed'
+```
+
+The child is a bare Vibe agent: its own system prompt, its own tools, its own
+skills. Nothing from the parent conversation, persona, or tool surface crosses
+the process boundary.
+
+## Two engines in one profile
+
+DSH has a single agent-factory slot, so two engine plugins cannot both drive
+sessions. The way to run both is a **router**: it owns the slot and delegates
+per session, and the session's **agent preset** decides which engine runs it.
+
+The preset is the DSH's own durable record of the choice — it lands in the
+session header (`agentPreset`), in the session log (`agent-preset/selected`)
+and in the `agentPreset` projection. A session that resumes picks the engine
+it was created with, even if the configuration changed in between.
+
+`profile/loop-router.mjs` is that router. It is a plain file rather than a
+package because it imports both engines, and a file inside the profile
+resolves them from the profile's `node_modules` (where both plugins are
+linked):
+
+```yaml
+# ~/.dsh/profiles/desktop/dsh/loop-router.mjs  ->  imports dsh-pi-loop and dsh-vibe-agent
+- insert:
+    - id: loop-router
+      name: 'file:///C:/Users/danalec/.dsh/profiles/desktop/dsh/loop-router.mjs'
+      config:
+        presets:
+          coding: pi          # heavy coding -> the Pi loop
+          coding-leve: vibe   # light coding -> the Mistral Vibe loop
+        default: vibe
+        pi:
+          piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd'
+          model: 'minimax/MiniMax-M3.1-Flash-Preview'
+          pinModel: true
+        vibe:
+          vibePath: 'C:\\Users\\danalec\\AppData\\Local\\Microsoft\\WinGet\\Links\\vibe-acp.exe'
+          model: 'mistral-large-4'
+          pinModel: true
+          permission: 'dsh'
+          mode: 'ask'
+```
+
+The presets themselves compose the delegation tool that runs the *other*
+engine in the background — that is the parallel path: a session on one loop
+hands work to the other while it keeps going.
+
+```yaml
+- insert:
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: coding-leve
+    - id: preset-coding
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: coding
+        name: 'Coding (Pi)'
+        plugins:
+          - id: tool-subagent-vibe
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: vibe
+              toolName: subagent-vibe
+              backgroundMode: one-shot
+              maxDepth: 'provider-managed'
+    - id: preset-coding-leve
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: coding-leve
+        name: 'Coding leve (Vibe)'
+        plugins:
+          - id: tool-subagent-pi
+            name: '@deepseek-ai/dsh-tool-subagent'
+            config:
+              provider: pi
+              toolName: subagent-pi
+              backgroundMode: one-shot
+              maxDepth: 'provider-managed'
+```
+
+The engine packages are still installed in the profile (both are linked to
+their working trees); only the router holds the factory slot.
+
 ## Compatibility
 
 The plugin implements the DSH **0.2 agent API**, developed and tested against
@@ -254,6 +363,10 @@ The suite covers the ACP client against a fake `vibe-acp` (a Node script that
 speaks the real protocol), the event translation (reasoning, answer, tool
 calls, usage, cancellation), the approval routing, the history replay and the
 image blocks.
+
+`tools/probe-router.mjs` mounts the router from a profile and creates one
+session per preset, printing the driver each one got; `tools/probe-subagent.mjs`
+runs one real task through the subagent provider.
 
 `tools/dsh-e2e.mjs` drives the whole lifecycle against the real DSH packages:
 it mounts the plugin on a bare context (sessions, agents, projections, the

@@ -11,7 +11,7 @@
 import { spawn, type ChildProcessByStdio, type StdioOptions } from 'node:child_process'
 import { statSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
-import type { Readable } from 'node:stream'
+import type { Readable, Writable } from 'node:stream'
 
 /** Executable extensions Windows accepts. */
 const WINDOWS_EXTENSIONS = ['.exe', '.com', '.cmd', '.bat']
@@ -63,8 +63,8 @@ function quoteArgument(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
-/** A child process whose stdout and stderr are pipes. */
-export type PipedChild = ChildProcessByStdio<null, Readable, Readable>
+/** A child process whose stdin, stdout and stderr are pipes. */
+export type PipedChild = ChildProcessByStdio<Writable, Readable, Readable>
 
 /**
  * Spawn the `vibe-acp` executable.
@@ -85,8 +85,8 @@ export function spawnVibe(command: string, args: string[], options: SpawnOptions
         process.env.ComSpec ?? 'cmd.exe',
         ['/d', '/s', '/c', `"${commandLine}"`],
         { ...options, windowsVerbatimArguments: true },
-      ) as PipedChild
+      ) as unknown as PipedChild
     }
   }
-  return spawn(command, args, options) as PipedChild
+  return spawn(command, args, options) as unknown as PipedChild
 }
