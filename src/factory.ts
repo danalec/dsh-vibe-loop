@@ -417,6 +417,8 @@ export class VibeAgentFactory implements AgentFactory {
     })
 
     try {
+      detachSession = agent.ctx.sessions.enter(session)
+      agent.ctx.sessions.announce(session)
       if (setup !== undefined) {
         try {
           const setupCommit = await setup(agent.ctx, agent)
@@ -426,9 +428,7 @@ export class VibeAgentFactory implements AgentFactory {
           throw error
         }
       }
-      detachSession = agent.ctx.sessions.enter(session)
       detachAgent = this.registryCtx.agents.enter(agent)
-      agent.ctx.sessions.announce(session)
       // The registry announces the agent and runs the `agent/created`
       // listeners with the creation source (fresh session or resume).
       await this.registryCtx.agents.announce(agent, source)
