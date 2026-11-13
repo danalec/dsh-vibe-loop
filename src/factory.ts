@@ -31,8 +31,11 @@ import {
   type SessionId,
 } from '@deepseek-ai/dsh-session'
 import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
+import type { ApprovalService } from '@deepseek-ai/dsh-user-approval'
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { VibeAcpClient } from './acp-client.ts'
 import { VibeAgent } from './vibe-agent.ts'
+import { buildVibeHistoryPrompt } from './history.ts'
 import { readVibeSessionId, writeVibeSessionId } from './vibe-session.ts'
 
 /** Why the session lifecycle began. */
@@ -45,7 +48,7 @@ export interface VibeFactoryOptions {
   vibeArgs?: string[]
   /** Working directory for Vibe sessions (defaults to process.cwd()). */
   cwd: string
-  /** Vibe model id (for example `mistral-large-4-0-3`). */
+  /** Vibe model id (for example `mistral-large-4`). */
   model?: string
   /**
    * Ignore the route DSH requests for a session and always use `model`.
@@ -57,10 +60,21 @@ export interface VibeFactoryOptions {
   /**
    * How Vibe's tool permission requests are answered.
    *
-   * `allow-once` (the default) approves the single call the agent asked
-   * for; `deny` refuses it. A standing grant is never given.
+   * `dsh` (the default) routes the request through DSH's own approval chain
+   * — the session's policy and the UI answerer decide. `allow-once` approves
+   * the single call the agent asked for; `deny` refuses it. A standing grant
+   * is never given.
    */
-  permission?: 'allow-once' | 'deny'
+  permission?: 'dsh' | 'allow-once' | 'deny'
+  /**
+   * The Vibe session mode.
+   *
+   * `ask` (the default) makes Vibe ask before every tool run, which is what
+   * lets the DSH approval chain decide. `accept-edits` auto-approves file
+   * edits, `smart-approve` classifies each call, `auto-approve` approves
+   * everything.
+   */
+  mode?: 'ask' | 'accept-edits' | 'smart-approve' | 'auto-approve'
   /** Diagnostics sink; omit to keep quiet. */
   logger?: (line: string) => void
   /** Lifecycle trace sink (apply/createAgent/resume); omit to keep quiet. */
@@ -273,6 +287,7 @@ export class VibeAgentFactory implements AgentFactory {
     const requested = agentOptions
     const { route, provider, model } = this.resolveRoute(requested)
 
+    const permission = this.options.permission ?? 'dsh'
     const acp = new VibeAcpClient({
       cwd,
       model: route === '' ? undefined : model,
@@ -280,16 +295,19 @@ export class VibeAgentFactory implements AgentFactory {
       ...(this.options.vibeArgs === undefined ? {} : { args: this.options.vibeArgs }),
       signal,
       logger: this.options.logger,
-      ...(this.options.permission === undefined ? {} : { permission: this.options.permission }),
+      ...(permission === 'allow-once' || permission === 'deny' ? { permission } : {}),
     })
 
     // The Vibe session carries the model's own context window. A resumed DSH
     // session reuses the Vibe session it used before, so the conversation
-    // continues exactly where it stopped; a fresh session starts empty.
+    // continues exactly where it stopped; a fresh session starts empty and
+    // is handed the conversation it lost.
     let vibeSessionId: string | undefined
+    let reloaded = false
     if (previousVibeSessionId !== undefined) {
       try {
         vibeSessionId = await acp.loadSession(previousVibeSessionId)
+        reloaded = true
       } catch (error: unknown) {
         this.options.trace?.(`vibe session "${previousVibeSessionId}" could not be loaded: ${String(error)}`)
         vibeSessionId = undefined
@@ -313,6 +331,30 @@ export class VibeAgentFactory implements AgentFactory {
       }
     }
 
+    // The mode decides whether Vibe asks before a tool runs. In `ask` mode
+    // every call reaches the DSH approval chain; the other modes let Vibe
+    // decide on its own. The mode is set explicitly: Vibe's own default is
+    // `accept-edits`, which would approve file edits behind the DSH's back.
+    const mode = this.options.mode ?? 'ask'
+    const allowedModes = acp.optionValues('mode')
+    if (allowedModes.length > 0 && !allowedModes.includes(mode)) {
+      throw new Error(`vibe session does not offer the mode "${mode}"; it offers ${allowedModes.join(', ')}`)
+    }
+    if (acp.optionCurrent('mode') !== mode) {
+      await acp.setOption('mode', mode)
+    }
+
+    const approval = permission === 'dsh'
+      ? this.registryCtx.get('approval') as ApprovalService | undefined
+      : undefined
+    const attachments = this.registryCtx.get('attachments') as AttachmentStore | undefined
+    // A Vibe session that could not be reloaded starts with an empty
+    // context: the conversation DSH's log holds is handed over with the
+    // first prompt, so the model continues where the log says it was.
+    const historyPrompt = reloaded
+      ? undefined
+      : buildVibeHistoryPrompt({ session, limit: 200 })
+
     const agent = new VibeAgent({
       ctx: this.registryCtx,
       session,
@@ -327,6 +369,10 @@ export class VibeAgentFactory implements AgentFactory {
       // reopen turn 1.
       lastTurn: this.registryCtx.agents.turnBoundaryOf(session).lastTurn,
       logger: this.options.logger,
+      ...(approval === undefined ? {} : { approval }),
+      ...(permission === 'dsh' ? {} : { permission }),
+      ...(historyPrompt === undefined ? {} : { historyPrompt }),
+      ...(attachments === undefined ? {} : { attachments }),
     })
 
     // Creation-window composition (the AgentFactory contract): await the

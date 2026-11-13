@@ -55,13 +55,21 @@ export class FakeAcp {
     this.updateListeners = new Set()
     this.exitListeners = new Set()
     this.prompts = []
+    this.contents = []
     this.cancelled = false
     this.closed = false
     this.sessionId = options.sessionId ?? 'vibe-session-1'
     this.capabilities = options.capabilities ?? { loadSession: true }
     this.configOptions = options.configOptions ?? [
       { id: 'model', currentValue: 'mistral-large-4-0-3', options: [{ value: 'mistral-large-4-0-3' }] },
+      {
+        id: 'mode',
+        currentValue: 'accept-edits',
+        options: [{ value: 'ask' }, { value: 'accept-edits' }, { value: 'smart-approve' }, { value: 'auto-approve' }],
+      },
     ]
+    /** The options the driver set, in order. */
+    this.setOptions = []
     this.usage = options.usage ?? { inputTokens: 120, outputTokens: 8, cachedReadTokens: 4 }
     /** The updates emitted for each prompt, in order. */
     this.replies = options.replies ?? []
@@ -102,6 +110,7 @@ export class FakeAcp {
   }
 
   async setOption(configId, value) {
+    this.setOptions.push({ configId, value })
     const option = this.configOptions.find((entry) => entry.id === configId)
     if (option) option.currentValue = value
   }
@@ -115,8 +124,12 @@ export class FakeAcp {
     return sessionId
   }
 
-  async prompt(text) {
+  async prompt(content) {
+    const text = typeof content === 'string'
+      ? content
+      : content.map((block) => block.text ?? '').join('\n')
     this.prompts.push(text)
+    this.contents.push(content)
     const reply = this.replies.shift()
     if (reply !== undefined) {
       for (const update of reply) this.emit(update)

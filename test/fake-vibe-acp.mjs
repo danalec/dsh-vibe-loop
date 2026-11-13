@@ -90,6 +90,21 @@ rl.on('line', (line) => {
       const sessionId = params?.sessionId
       const text = (params?.prompt ?? []).map(part => part.text ?? '').join('\n')
       if (text.includes('tool')) {
+        // Vibe asks before it runs a tool.
+        send({
+          jsonrpc: '2.0',
+          id: ++nextId,
+          method: 'session/request_permission',
+          params: {
+            sessionId,
+            toolCallId: 'call_1',
+            title: 'Read a.ts',
+            options: [
+              { kind: 'allow_once', optionId: 'allow-once', name: 'Allow once' },
+              { kind: 'reject', optionId: 'reject', name: 'Reject' },
+            ],
+          },
+        })
         update(sessionId, {
           sessionUpdate: 'tool_call',
           toolCallId: 'call_1',

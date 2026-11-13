@@ -35,10 +35,11 @@ lifecycle — a different engine behind it.
 
 | Layer | Behavior |
 | --- | --- |
-| Model routing | Vibe's own model ids (`mistral-large-4-0-3`); the session's model option is set through ACP's `session/set_config_option`. A model the session does not offer fails loudly instead of silently running another one |
-| Tool execution | the tools run inside Vibe. DSH's log records them (`tool/call`, `tool/result`) as they happen, but they do not pass through DSH's tool surface |
-| Permissions | Vibe asks before a tool runs (`session/request_permission`). The plugin answers **one call at a time** (`allow-once`, the default) or refuses it (`deny`); a standing grant is never given |
-| Steering | ACP has no mid-run steering. A `next-step` message is queued and delivered with the next prompt — nothing is lost, but it does not interrupt the running turn |
+| Model routing | Vibe's own model ids (`mistral-large-4`); the session's model option is set through ACP's `session/set_config_option`. A model the session does not offer fails loudly instead of silently running another one |
+| Tool execution | the tools run inside Vibe. DSH's log records them (`tool/call`, `tool/result`) as they happen, with Vibe's own tool name (`read_file`, `write_file`, …) and its real output — but they do not pass through DSH's tool surface |
+| Permissions | the session runs in Vibe's `ask` mode, so every tool run is a question. The plugin routes it through **DSH's own approval chain** (`permission: 'dsh'`, the default): the session's approval policy applies and the UI answerer decides. `allow-once` approves the single call; `deny` refuses it. A standing grant is never given |
+| Images | a DSH user message may carry images; their bytes are read through the attachment store and sent as ACP image blocks |
+| Steering | ACP has no mid-run steering. A `next-step` message is queued and delivered with the next prompt, in the same turn — nothing is lost, but it does not interrupt the running turn |
 | Session persistence | DSH's session events remain the durable source of truth; the Vibe session id is kept in a sidecar (`~/.dsh/vibe-sessions/<session-id>.json`) so a resume reloads the same Vibe conversation |
 | Fallback | Disable this plugin's entry and re-enable `agent-loop`: DSH's own `dsh-agent-loop` becomes active again immediately. Only one factory may hold the agent slot at a time, so the two entries are mutually exclusive |
 
@@ -76,9 +77,11 @@ model keeps the context it had, not a rebuilt approximation of it.
 - DSH remains the source of truth for the frontend; the Vibe session id lives
   in a sidecar under `~/.dsh/vibe-sessions/`.
 - When the Vibe session is gone (or the agent does not advertise
-  `loadSession`), the plugin starts a fresh Vibe session and says so in the
-  diagnostics — the DSH log still shows the whole history, but the model's own
-  context starts empty.
+  `loadSession`), the plugin starts a fresh Vibe session and hands it the
+  conversation DSH's log holds — rendered as a transcript, delivered with the
+  first prompt. The model then continues from the history instead of starting
+  blind, and the diagnostics say which path was taken (`session] loaded` vs
+  `session] new`).
 
 ## Compatibility
 
@@ -168,9 +171,10 @@ already exists:
 | `vibePath` | `string` | `'vibe-acp'` | `vibe-acp` executable; resolved from `PATH` |
 | `vibeArgs` | `string[]` | `[]` | Extra arguments passed to the executable |
 | `cwd` | `string` | `process.cwd()` | Working directory for Vibe sessions (a session's own `cwd` wins) |
-| `model` | `string` | — | Vibe model id (for example `mistral-large-4-0-3`) |
+| `model` | `string` | — | Vibe model id (for example `mistral-large-4`) |
 | `pinModel` | `boolean` | `false` | Always use `model`, ignoring the route DSH requests for a session |
-| `permission` | `'allow-once' \| 'deny'` | `'allow-once'` | How Vibe's tool permission requests are answered; a standing grant is never given |
+| `permission` | `'dsh' \| 'allow-once' \| 'deny'` | `'dsh'` | How Vibe's tool permission requests are answered: through DSH's own approval chain, once per call, or refused. A standing grant is never given |
+| `mode` | `'ask' \| 'accept-edits' \| 'smart-approve' \| 'auto-approve'` | `'ask'` | The Vibe session mode. `ask` is what lets the approval chain decide; Vibe's own default (`accept-edits`) would approve file edits behind DSH's back |
 | `debug` | `boolean` | `false` | Append protocol diagnostics to `<tmpdir>/dsh-vibe-agent.log` |
 
 ### Mounting rules
@@ -189,9 +193,9 @@ Two rules decide whether the plugin comes up:
 
 | Phase | What happens |
 | --- | --- |
-| create | the session is prepared, the persistence backend takes the write ownership of the stored log, a Vibe session is created (`session/new`), the model option is applied, and the ACP session id is written to the sidecar |
-| turn | DSH input is claimed from the inbox, the prompt goes to Vibe (`session/prompt`), Vibe's updates become DSH session events, and the backend stores them through its `session/event` subscription |
-| resume | the stored log is read back, an interrupted turn is closed durably, the Vibe session is reloaded (`session/load`), and the next prompt continues that conversation |
+| create | the session is prepared, the persistence backend takes the write ownership of the stored log, a Vibe session is created (`session/new`), the model and the mode are applied, and the ACP session id is written to the sidecar |
+| turn | DSH input is claimed from the inbox, the prompt goes to Vibe (`session/prompt`), Vibe's updates become DSH session events, and the backend stores them through its `session/event` subscription. A tool Vibe asks about goes through the DSH approval chain first |
+| resume | the stored log is read back, an interrupted turn is closed durably, the Vibe session is reloaded (`session/load`) — or, when it is gone, the conversation is handed over as a transcript — and the next prompt continues that conversation |
 | dispose | the child is stopped, the scope unwinds, and the persistence handle is closed |
 
 ## Platform notes
@@ -213,7 +217,8 @@ Two rules decide whether the plugin comes up:
 | `no agent factory registered (load an agent-loop plugin)` | the plugin did not mount (wrong entry name, or the profile has no `agent-loop` and no `vibe-loop`) | check the entry `name:` and the loader's diagnostics |
 | `vibe-acp process failed to start` | the executable is not on `PATH` | point `vibePath` at the absolute path |
 | `vibe session does not offer the model "…"` | the model id is not one the session offers | check the ids Vibe lists for the `model` option |
-| The resumed turn has no context | the Vibe session was gone and a fresh one was started | check the diagnostics for `session] loaded` vs `session] new` |
+| The resumed turn has no context | the Vibe session was gone and a fresh one was started | check the diagnostics for `session] loaded` vs `session] new`; the transcript is handed over with the first prompt |
+| Every tool is refused | the approval chain has no answerer (the profile has no approval UI) and the session policy is `ask` | set `permission: 'allow-once'`, or compose an approval answerer in the profile |
 | No diagnostics | `debug` is off | set `debug: true` and read `%TEMP%/dsh-vibe-agent.log` |
 
 ## Debugging
@@ -247,7 +252,8 @@ on Node ≥ 20.11.
 
 The suite covers the ACP client against a fake `vibe-acp` (a Node script that
 speaks the real protocol), the event translation (reasoning, answer, tool
-calls, usage, cancellation) and the model route.
+calls, usage, cancellation), the approval routing, the history replay and the
+image blocks.
 
 `tools/dsh-e2e.mjs` drives the whole lifecycle against the real DSH packages:
 it mounts the plugin on a bare context (sessions, agents, projections, the

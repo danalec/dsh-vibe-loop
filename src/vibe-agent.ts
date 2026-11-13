@@ -52,9 +52,11 @@ import type {
   SessionSeq,
   TurnEndReason,
 } from '@deepseek-ai/dsh-session'
+import type { ApprovalService } from '@deepseek-ai/dsh-user-approval'
+import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { VibeInbox, type VibeInboxNotifications } from './inbox.ts'
 import { VibeModel } from './model.ts'
-import type { AcpUpdate, VibeAcpClient } from './acp-client.ts'
+import type { AcpContentBlock, AcpPermissionDecision, AcpPermissionRequest, AcpUpdate, VibeAcpClient } from './acp-client.ts'
 
 export interface VibeAgentOptions {
   /** Base context whose dependency API the agent's own scope inherits. */
@@ -72,6 +74,34 @@ export interface VibeAgentOptions {
   lastTurn?: number
   /** Diagnostics sink. */
   logger?: (line: string) => void
+  /**
+   * The DSH approval service.
+   *
+   * When the profile has one, Vibe's permission requests are decided by the
+   * session's own approval policy — the same chain DSH's native loop uses.
+   * Without it the fallback policy below decides.
+   */
+  approval?: ApprovalService
+  /**
+   * The fallback decision for a permission request when no approval service
+   * answers: `allow-once` (the default) or `deny`.
+   */
+  permission?: 'allow-once' | 'deny'
+  /**
+   * The conversation a fresh Vibe session is handed.
+   *
+   * Set when the Vibe session could not be reloaded: the model would
+   * otherwise start with an empty context while DSH's log still holds the
+   * conversation. The text is delivered with the first prompt.
+   */
+  historyPrompt?: string
+  /**
+   * The attachment store, when the profile has one.
+   *
+   * The DSH's user messages may carry images; the agent reads their bytes
+   * through the store and sends them to Vibe as ACP image blocks.
+   */
+  attachments?: AttachmentStore
 }
 
 /**
@@ -146,11 +176,22 @@ function convertUsage(usage: unknown): TokenUsage | undefined {
  * Convert a Vibe tool outcome into DSH content blocks.
  *
  * ACP reports a tool result as a list of content items (`{type:'content',
- * content:{type:'text', text}}`). The DSH `tool/result` message carries the
- * *content*, so the envelope must be unwrapped.
+ * content:{type:'text', text}}`) or as the tool's raw output object. The DSH
+ * `tool/result` message carries the *content*, so the envelope must be
+ * unwrapped — and the raw output is preferred, because it is what the model
+ * actually saw (a file's content, not "Read 1 line from notes.txt").
  */
 function convertToolResult(content: unknown): ContentBlock[] {
   const blocks: ContentBlock[] = []
+  if (content !== null && typeof content === 'object' && !Array.isArray(content)) {
+    const record = content as { content?: unknown, text?: unknown }
+    if (typeof record.content === 'string') {
+      return [{ type: 'text', text: record.content }]
+    }
+    if (typeof record.text === 'string') {
+      return [{ type: 'text', text: record.text }]
+    }
+  }
   const items = Array.isArray(content) ? content : content === undefined ? [] : [content]
   for (const item of items) {
     if (!item || typeof item !== 'object') continue
@@ -169,14 +210,6 @@ function convertToolResult(content: unknown): ContentBlock[] {
   return blocks.length > 0 ? blocks : [{ type: 'text', text: '' }]
 }
 
-/** Extract the text payload of a DSH UserMessage for the Vibe prompt. */
-function extractDshText(message: UserMessage): string {
-  return message.content
-    .map((block) => (block.type === 'text' ? block.text : ''))
-    .filter((text) => text !== '')
-    .join('\n')
-}
-
 export class VibeAgent implements Agent {
   readonly id: SessionId
   readonly options: AgentOptions
@@ -192,6 +225,13 @@ export class VibeAgent implements Agent {
   private readonly unwatch: () => void
   private readonly unwatchExit: () => void
   private readonly logger?: (line: string) => void
+  private readonly approval?: ApprovalService
+  private readonly permission: 'allow-once' | 'deny'
+  private readonly attachments?: AttachmentStore
+  /** The conversation handed to a fresh Vibe session, sent with the first prompt. */
+  private readonly historyPrompt?: string
+  /** Whether the history was already delivered. */
+  private historyDelivered = false
 
   private phase: Phase = { kind: 'idle', lastTurn: 0 }
   private activityDone: Promise<void> = Promise.resolve()
@@ -235,6 +275,10 @@ export class VibeAgent implements Agent {
   constructor(options: VibeAgentOptions) {
     this.acp = options.acp
     this.logger = options.logger
+    this.approval = options.approval
+    this.permission = options.permission ?? 'allow-once'
+    this.attachments = options.attachments
+    this.historyPrompt = options.historyPrompt
     this.id = options.session.id
     this.options = options.agentOptions
     this.session = options.session
@@ -260,6 +304,10 @@ export class VibeAgent implements Agent {
     this.model = new VibeModel(this.session, this.options)
     this.dispatch = agentEvents(options.ctx, this)
     this.unwatch = this.acp.onUpdate((update) => this.onAcpUpdate(update))
+    // Vibe asks before it runs a tool. The decision goes through DSH's own
+    // approval chain when the profile has one, so the question reaches the
+    // same UI the native loop uses.
+    this.acp.onPermission = (request) => this.decidePermission(request)
     // A dead child must not leave the driver waiting forever: settle the
     // pending run with the exit reason so the turn can close.
     this.unwatchExit = this.acp.onExit((info) => {
@@ -461,9 +509,9 @@ export class VibeAgent implements Agent {
         for (const message of messages) {
           this.session.append('user/message', message, { surfaceOp: 'append' })
         }
-        const promptText = messages.map(extractDshText).filter((text) => text !== '').join('\n')
-        if (promptText !== '') {
-          await this.runVibe(promptText, turn, step)
+        const content = await this.buildPrompt(messages)
+        if (content.length > 0) {
+          await this.runVibe(content, turn, step)
         }
         this.closeStep()
 
@@ -511,15 +559,91 @@ export class VibeAgent implements Agent {
   // ---- Vibe run ----
 
   /**
+   * Decide one of Vibe's permission requests.
+   *
+   * The DSH approval service applies the session's policy first and then
+   * asks the composed answerers — the same chain DSH's native loop uses, so
+   * the question reaches the same UI. Without the service (a profile without
+   * the approval bundle) the fallback policy decides.
+   */
+  private async decidePermission(request: AcpPermissionRequest): Promise<AcpPermissionDecision> {
+    const approval = this.approval
+    if (approval === undefined) {
+      return this.permission === 'deny' ? 'reject' : 'allow-once'
+    }
+    try {
+      const outcome = await approval.request({
+        agent: this,
+        toolName: request.title,
+        ...(request.toolCallId === undefined ? {} : { callId: ToolCallId(request.toolCallId) }),
+        reason: `Vibe asks to run: ${request.title}`,
+      })
+      return outcome === 'allowed-once' ? 'allow-once' : 'reject'
+    } catch (error: unknown) {
+      this.logger?.(`[vibe-loop] the approval request failed: ${String(error)}`)
+      return 'reject'
+    }
+  }
+
+  /**
+   * Build the content of one prompt.
+   *
+   * The DSH's user messages may carry images; their bytes are read through
+   * the attachment store and sent as ACP image blocks. A message whose image
+   * cannot be read keeps its text — nothing is silently dropped.
+   */
+  private async buildPrompt(messages: UserMessage[]): Promise<AcpContentBlock[]> {
+    const blocks: AcpContentBlock[] = []
+    for (const message of messages) {
+      for (const block of message.content) {
+        if (block.type === 'text') {
+          if (block.text !== '') blocks.push({ type: 'text', text: block.text })
+          continue
+        }
+        if (block.type !== 'image') continue
+        const image = await this.readImage(block.attachment)
+        if (image === undefined) continue
+        blocks.push(image)
+      }
+    }
+    return blocks
+  }
+
+  /** Read one image attachment and turn it into an ACP image block. */
+  private async readImage(ref: unknown): Promise<AcpContentBlock | undefined> {
+    const store = this.attachments
+    if (store === undefined) return undefined
+    try {
+      const stored = await store.readImage(ref as Parameters<AttachmentStore['readImage']>[0])
+      return {
+        type: 'image',
+        mimeType: stored.ref.mediaType,
+        data: Buffer.from(stored.data).toString('base64'),
+      }
+    } catch (error: unknown) {
+      this.logger?.(`[vibe-loop] an image could not be read: ${String(error)}`)
+      return undefined
+    }
+  }
+
+  /**
    * Send one prompt to Vibe and wait until the turn ends.
    *
    * The answer arrives through the update stream while this call is pending;
    * the response only carries the stop reason and the token usage.
    */
-  private async runVibe(promptText: string, turn: number, step: number): Promise<void> {
+  private async runVibe(content: AcpContentBlock[], turn: number, step: number): Promise<void> {
     this.resetAttempt()
-    const result = await this.acp.prompt(promptText)
-    // The prompt may have produced nothing at all (a cancelled turn): the
+    const blocks: AcpContentBlock[] = []
+    // A Vibe session that could not be reloaded starts with an empty
+    // context: the conversation it lost is handed over with the first
+    // prompt, so the model continues where DSH's log says it was.
+    if (!this.historyDelivered && this.historyPrompt !== undefined && this.historyPrompt !== '') {
+      this.historyDelivered = true
+      blocks.push({ type: 'text', text: this.historyPrompt })
+    }
+    blocks.push(...content)
+    const result = await this.acp.prompt(blocks)    // The prompt may have produced nothing at all (a cancelled turn): the
     // assistant message is then absent, and DSH records the attempt instead.
     if (this.assistantText === '' && this.assistantReasoning === '') {
       const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
@@ -529,11 +653,11 @@ export class VibeAgent implements Agent {
       return
     }
     const usage = convertUsage(result.usage)
-    const blocks: ContentBlock[] = []
+    const contentBlocks: ContentBlock[] = []
     if (this.assistantReasoning !== '') {
-      blocks.push({ type: 'reasoning', text: this.assistantReasoning })
+      contentBlocks.push({ type: 'reasoning', text: this.assistantReasoning })
     }
-    blocks.push({ type: 'text', text: this.assistantText })
+    contentBlocks.push({ type: 'text', text: this.assistantText })
     const sourceProvider = this.options.provider ?? 'mistral'
     const sourceModel = this.options.model ?? ''
     const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
@@ -543,7 +667,7 @@ export class VibeAgent implements Agent {
         turn,
         step,
         message: createAssistantMessage({
-          content: blocks,
+          content: contentBlocks,
           source: { provider: sourceProvider, model: sourceModel },
         }),
         stream,
@@ -626,12 +750,20 @@ export class VibeAgent implements Agent {
         const raw = update.raw as {
           toolCallId?: unknown
           title?: unknown
+          kind?: unknown
           rawInput?: unknown
           rawOutput?: unknown
+          _meta?: { tool_name?: unknown }
         }
         const id = String(raw.toolCallId ?? '')
         if (id === '') return
-        const name = String(raw.title ?? 'tool')
+        // Vibe reports the tool's own name in `_meta.tool_name` (`read_file`,
+        // `write_file`, …); the title is the human-readable label it shows.
+        const meta = raw._meta
+        const toolName = meta !== undefined && typeof meta.tool_name === 'string'
+          ? meta.tool_name
+          : typeof raw.kind === 'string' ? raw.kind : ''
+        const name = toolName !== '' ? toolName : String(raw.title ?? 'tool')
         const args = raw.rawInput ?? raw.rawOutput ?? {}
         const argumentsText = typeof args === 'string' ? args : JSON.stringify(args)
         this.openStep()
@@ -658,7 +790,7 @@ export class VibeAgent implements Agent {
         if (id === '') return
         const status = String(raw.status ?? '')
         if (status !== 'completed' && status !== 'failed') return
-        const blocks = convertToolResult(raw.content ?? raw.rawOutput)
+        const blocks = convertToolResult(raw.rawOutput ?? raw.content)
         const callId = ToolCallId(id)
         const message = createToolResultMessage({
           callId,

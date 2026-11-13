@@ -37,8 +37,9 @@ ciclo de vida de sessão — outro motor por trás.
 | Camada | Comportamento |
 | --- | --- |
 | Roteamento de modelo | ids de modelo do Vibe (`mistral-large-4-0-3`); a opção de modelo da sessão é ajustada por `session/set_config_option`. Um modelo que a sessão não oferece falha alto, em vez de rodar outro silenciosamente |
-| Execução de ferramentas | as ferramentas rodam dentro do Vibe. O log do DSH as registra (`tool/call`, `tool/result`) conforme acontecem, mas elas não passam pela superfície de tools do DSH |
-| Permissões | o Vibe pergunta antes de rodar uma ferramenta (`session/request_permission`). O plugin responde **uma chamada por vez** (`allow-once`, o padrão) ou recusa (`deny`); concessão permanente nunca é dada |
+| Execução de ferramentas | as ferramentas rodam dentro do Vibe. O log do DSH as registra (`tool/call`, `tool/result`) conforme acontecem, com o nome real da tool do Vibe (`read_file`, `write_file`, …) e a saída de verdade — mas elas não passam pela superfície de tools do DSH |
+| Permissões | a sessão roda no modo `ask` do Vibe, então toda tool é uma pergunta. O plugin encaminha pela **própria cadeia de aprovação do DSH** (`permission: 'dsh'`, o padrão): a política da sessão se aplica e o respondedor da UI decide. `allow-once` aprova a chamada única; `deny` recusa. Concessão permanente nunca é dada |
+| Imagens | uma mensagem do usuário do DSH pode trazer imagens; os bytes são lidos pelo attachment store e enviados como blocos de imagem ACP |
 | Steering | ACP não tem steering no meio da execução. Uma mensagem `next-step` fica na fila e é entregue com o próximo prompt — nada se perde, mas ela não interrompe o turno em andamento |
 | Persistência de sessão | os eventos de sessão do DSH continuam sendo a fonte durável da verdade; o id da sessão Vibe fica num sidecar (`~/.dsh/vibe-sessions/<session-id>.json`) para o resume recarregar a mesma conversa |
 | Fallback | desabilite a entrada deste plugin e reabilite o `agent-loop`: o `dsh-agent-loop` do próprio DSH volta a valer. Só um factory pode ocupar o slot de agente, então as duas entradas são mutuamente exclusivas |
@@ -62,8 +63,10 @@ aproximação reconstruída.
 - O DSH continua sendo a fonte da verdade para o frontend; o id da sessão
   Vibe fica num sidecar em `~/.dsh/vibe-sessions/`.
 - Quando a sessão Vibe sumiu (ou o agente não anuncia `loadSession`), o plugin
-  inicia uma sessão Vibe nova e avisa no diagnóstico — o log do DSH continua
-  mostrando toda a história, mas o contexto do modelo começa vazio.
+  inicia uma sessão Vibe nova e **entrega a conversa que o log do DSH guarda**
+  — renderizada como transcrição, entregue com o primeiro prompt. O modelo
+  continua a partir da história em vez de começar às cegas, e o diagnóstico
+  diz qual caminho foi tomado (`session] loaded` vs `session] new`).
 
 ## Compatibilidade
 
@@ -147,18 +150,19 @@ entrada que já existe:
 | `vibePath` | `string` | `'vibe-acp'` | executável `vibe-acp`; resolvido pelo `PATH` |
 | `vibeArgs` | `string[]` | `[]` | argumentos extras passados ao executável |
 | `cwd` | `string` | `process.cwd()` | diretório de trabalho das sessões Vibe |
-| `model` | `string` | — | id de modelo do Vibe (por exemplo `mistral-large-4-0-3`) |
+| `model` | `string` | — | id de modelo do Vibe (por exemplo `mistral-large-4`) |
 | `pinModel` | `boolean` | `false` | sempre usar `model`, ignorando a rota pedida pelo DSH |
-| `permission` | `'allow-once' \| 'deny'` | `'allow-once'` | como responder aos pedidos de permissão de tool; concessão permanente nunca é dada |
+| `permission` | `'dsh' \| 'allow-once' \| 'deny'` | `'dsh'` | como responder aos pedidos de permissão de tool: pela cadeia de aprovação do DSH, uma vez por chamada, ou recusando. Concessão permanente nunca é dada |
+| `mode` | `'ask' \| 'accept-edits' \| 'smart-approve' \| 'auto-approve'` | `'ask'` | o modo da sessão Vibe. `ask` é o que deixa a cadeia de aprovação decidir; o padrão do Vibe (`accept-edits`) aprovaria edições sem o DSH ver |
 | `debug` | `boolean` | `false` | anexa diagnósticos do protocolo em `<tmpdir>/dsh-vibe-agent.log` |
 
 ## Ciclo de vida da sessão
 
 | Fase | O que acontece |
 | --- | --- |
-| create | a sessão é preparada, o backend assume a escrita do log, uma sessão Vibe é criada (`session/new`), a opção de modelo é aplicada e o id da sessão ACP vai para o sidecar |
-| turn | a entrada é reivindicada na inbox, o prompt vai para o Vibe (`session/prompt`), os updates do Vibe viram eventos de sessão do DSH e o backend os armazena |
-| resume | o log armazenado volta, um turno interrompido é fechado duravelmente, a sessão Vibe é recarregada (`session/load`) e o próximo prompt continua essa conversa |
+| create | a sessão é preparada, o backend assume a escrita do log, uma sessão Vibe é criada (`session/new`), o modelo e o modo são aplicados e o id da sessão ACP vai para o sidecar |
+| turn | a entrada é reivindicada na inbox, o prompt vai para o Vibe (`session/prompt`), os updates do Vibe viram eventos de sessão do DSH e o backend os armazena. Uma tool sobre a qual o Vibe pergunta passa antes pela cadeia de aprovação do DSH |
+| resume | o log armazenado volta, um turno interrompido é fechado duravelmente, a sessão Vibe é recarregada (`session/load`) — ou, quando ela sumiu, a conversa é entregue como transcrição — e o próximo prompt continua essa conversa |
 | dispose | o filho é parado, o scope é desfeito e o handle de persistência é fechado |
 
 ## Notas de plataforma

@@ -42,6 +42,9 @@ export { VibeAcpClient } from './acp-client.ts'
 export type {
   AcpCapabilities,
   AcpConfigOption,
+  AcpContentBlock,
+  AcpPermissionDecision,
+  AcpPermissionRequest,
   AcpSessionUpdate,
   AcpUpdate,
   VibeAcpClientOptions,
@@ -50,6 +53,8 @@ export { VibeAgentFactory, resolveVibeRoute } from './factory.ts'
 export type { ResolvedRoute, VibeFactoryOptions, VibeSessionStartSource } from './factory.ts'
 export { VibeAgent } from './vibe-agent.ts'
 export type { VibeAgentOptions } from './vibe-agent.ts'
+export { buildVibeHistory, buildVibeHistoryPrompt, renderVibeHistory } from './history.ts'
+export type { BuildVibeHistoryOptions, VibeHistoryEntry } from './history.ts'
 export { VibeInbox, applyInboxSplice, foldInboxState } from './inbox.ts'
 export type { VibeInboxNotifications, VibeInboxState } from './inbox.ts'
 export { VibeModel, foldModelState, sameModelSelection } from './model.ts'
@@ -82,7 +87,7 @@ export interface Config {
   vibeArgs?: string[]
   /** Working directory for Vibe sessions. Defaults to process.cwd(). */
   cwd?: string
-  /** Vibe model id (for example `mistral-large-4-0-3`). */
+  /** Vibe model id (for example `mistral-large-4`). */
   model?: string
   /**
    * Always use `model`, ignoring the route DSH requests for a session.
@@ -92,10 +97,23 @@ export interface Config {
    */
   pinModel?: boolean
   /**
-   * How Vibe's tool permission requests are answered: `allow-once` (the
-   * default) or `deny`. A standing grant is never given.
+   * How Vibe's tool permission requests are answered.
+   *
+   * `dsh` (the default) routes the request through DSH's own approval chain
+   * — the session's policy and the UI answerer decide. `allow-once` approves
+   * the single call the agent asked for; `deny` refuses it. A standing grant
+   * is never given.
    */
-  permission?: 'allow-once' | 'deny'
+  permission?: 'dsh' | 'allow-once' | 'deny'
+  /**
+   * The Vibe session mode.
+   *
+   * `ask` (the default) makes Vibe ask before every tool run, which is what
+   * lets the DSH approval chain decide. `accept-edits` auto-approves file
+   * edits, `smart-approve` classifies each call, `auto-approve` approves
+   * everything.
+   */
+  mode?: 'ask' | 'accept-edits' | 'smart-approve' | 'auto-approve'
   /** Protocol diagnostics; appended to `<tmpdir>/dsh-vibe-agent.log`. */
   debug?: boolean
 }
@@ -106,7 +124,8 @@ export const Config = z.object({
   cwd: z.string(),
   model: z.string(),
   pinModel: z.boolean(),
-  permission: z.union(['allow-once', 'deny']),
+  permission: z.union(['dsh', 'allow-once', 'deny']),
+  mode: z.union(['ask', 'accept-edits', 'smart-approve', 'auto-approve']),
   debug: z.boolean(),
 }) as unknown as z<Config>
 
@@ -149,6 +168,7 @@ export function apply(ctx: Context, config: Config): () => void {
         model: config.model,
         pinModel: config.pinModel,
         ...(config.permission === undefined ? {} : { permission: config.permission }),
+        ...(config.mode === undefined ? {} : { mode: config.mode }),
         logger,
         trace: debug ? trace : undefined,
       },

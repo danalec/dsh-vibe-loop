@@ -60,6 +60,22 @@ export interface AcpConfigOption {
   options?: { value?: string, name?: string, description?: string }[]
 }
 
+/** One content block of an ACP prompt. */
+export type AcpContentBlock =
+  | { type: 'text', text: string }
+  | { type: 'image', mimeType: string, data: string }
+
+/** What the agent asked before running a tool. */
+export interface AcpPermissionRequest {
+  sessionId: string
+  toolCallId?: string
+  title: string
+  options: { kind?: string, optionId?: string, id?: string, name?: string }[]
+}
+
+/** The answer to a permission request. */
+export type AcpPermissionDecision = 'allow-once' | 'reject'
+
 /** The agent's advertised capabilities. */
 export interface AcpCapabilities {
   loadSession?: boolean
@@ -89,8 +105,19 @@ export interface VibeAcpClientOptions {
    *
    * `allow-once` (the default) approves the single call the agent asked
    * for; `deny` refuses it. A standing grant is never given.
+   *
+   * When {@link VibeAcpClientOptions.onPermission} is set, the decision is
+   * that callback's — the DSH's own approval chain decides.
    */
   permission?: 'allow-once' | 'deny'
+  /**
+   * Decides a permission request.
+   *
+   * The DSH driver routes the request through the session's approval policy
+   * and answers; the client's own `permission` setting is the fallback when
+   * no callback is installed.
+   */
+  onPermission?: (request: AcpPermissionRequest) => Promise<AcpPermissionDecision>
 }
 
 interface PendingRequest {
@@ -116,6 +143,14 @@ export class VibeAcpClient {
   private readonly requestTimeoutMs: number
   private readonly closeGraceMs: number
   private readonly permission: 'allow-once' | 'deny'
+  /**
+   * Decides a permission request.
+   *
+   * The DSH driver installs its own after construction: it routes the
+   * request through the session's approval policy and answers. The client's
+   * own `permission` setting is the fallback when no callback is installed.
+   */
+  onPermission?: (request: AcpPermissionRequest) => Promise<AcpPermissionDecision>
   private buffer = ''
   private closed = false
   private exited = false
@@ -131,6 +166,7 @@ export class VibeAcpClient {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 600_000
     this.closeGraceMs = options.closeGraceMs ?? 5_000
     this.permission = options.permission ?? 'allow-once'
+    this.onPermission = options.onPermission
     this.exitPromise = new Promise((resolvePromise) => {
       this.resolveExit = resolvePromise
     })
@@ -253,22 +289,45 @@ export class VibeAcpClient {
    */
   private answerPermission(message: AcpMessage): void {
     const params = (message.params ?? {}) as {
+      sessionId?: string
+      toolCallId?: string
+      title?: string
+      toolCall?: { toolCallId?: string, title?: string, kind?: string }
       options?: { kind?: string, optionId?: string, id?: string, name?: string }[]
     }
     const options = params.options ?? []
-    const allowOnce = options.find(option => {
+    void this.decidePermission({
+      sessionId: params.sessionId ?? this.sessionId ?? '',
+      toolCallId: params.toolCall?.toolCallId ?? params.toolCallId ?? '',
+      title: params.toolCall?.title ?? params.title ?? options.find(option => option.name !== undefined)?.name ?? 'tool',
+      options,
+    }, message)
+  }
+
+  /** Resolve the decision and send it back to the agent. */
+  private async decidePermission(request: AcpPermissionRequest, message: AcpMessage): Promise<void> {
+    let decision: AcpPermissionDecision = this.permission === 'deny' ? 'reject' : 'allow-once'
+    if (this.onPermission !== undefined) {
+      try {
+        decision = await this.onPermission(request)
+      } catch (error: unknown) {
+        this.logger?.(`[vibe:permission] the decision failed (${String(error)}); refusing`)
+        decision = 'reject'
+      }
+    }
+    const allowOnce = request.options.find(option => {
       const kind = String(option.kind ?? '')
       const id = String(option.optionId ?? option.id ?? '')
-      return kind === 'allow_once' || id.toLowerCase().startsWith('allow_once')
+      return kind === 'allow_once' || kind.startsWith('allow_once') || id.toLowerCase().startsWith('allow_once')
     })
-    const deny = options.find(option => {
+    const deny = request.options.find(option => {
       const kind = String(option.kind ?? '')
       const id = String(option.optionId ?? option.id ?? '')
-      return kind === 'reject' || kind === 'deny' || id.toLowerCase().startsWith('reject')
+      return kind.startsWith('reject') || kind.startsWith('deny') || id.toLowerCase().startsWith('reject')
     })
-    const chosen = this.permission === 'deny' ? deny : allowOnce ?? deny
+    const chosen = decision === 'allow-once' ? allowOnce ?? deny : deny ?? allowOnce
     const optionId = chosen?.optionId ?? chosen?.id
-    this.logger?.(`[vibe:permission] answered ${this.permission} (${String(optionId ?? 'none')})`)
+    this.logger?.(`[vibe:permission] answered ${decision} (${String(optionId ?? 'none')})`)
     if (message.id === undefined) return
     const outcome = optionId === undefined
       ? { outcome: 'cancelled' }
@@ -405,11 +464,14 @@ export class VibeAcpClient {
    * The answer arrives through the update stream while this promise is
    * pending; the result only carries the stop reason and the token usage.
    */
-  async prompt(text: string, timeoutMs?: number): Promise<{ stopReason?: string, usage?: unknown }> {
+  async prompt(content: string | AcpContentBlock[], timeoutMs?: number): Promise<{ stopReason?: string, usage?: unknown }> {
     if (this.sessionId === undefined) throw new Error('no vibe-acp session')
+    const blocks: AcpContentBlock[] = typeof content === 'string'
+      ? [{ type: 'text', text: content }]
+      : content
     const result = await this.request('session/prompt', {
       sessionId: this.sessionId,
-      prompt: [{ type: 'text', text }],
+      prompt: blocks,
     }, timeoutMs)
     return (result ?? {}) as { stopReason?: string, usage?: unknown }
   }
