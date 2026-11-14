@@ -6,7 +6,7 @@
  * preset, reading the router's own log lines.
  */
 import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -15,6 +15,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import ToolsService from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import { apply as applyPersistence, Config as PersistenceConfig, name as persistenceName } from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 const PROFILE = process.env.DSH_PROFILE ?? 'C:/Users/danalec/.dsh/profiles/desktop'
@@ -30,6 +31,7 @@ await ctx.plugin(SessionProjectionRegistry)
 await ctx.plugin(LlmRuntime)
 await ctx.plugin(ToolsService)
 await ctx.plugin(SystemPrompt)
+await ctx.plugin(LocalCredentialProvider, { dshHome: join(homedir(), '.dsh') })
 await ctx.plugin({ name: persistenceName, Config: PersistenceConfig, apply: applyPersistence }, { root: store })
 
 await ctx.plugin({
@@ -37,7 +39,10 @@ await ctx.plugin({
   inject: router.inject,
   apply: router.apply,
 }, {
-  presets: { coding: 'pi', 'coding-leve': 'vibe' },
+  presets: {
+    coding: { engine: 'pi', model: 'zai/glm-5.3-flash' },
+    'coding-leve': { engine: 'vibe', model: 'mistral-large-4' },
+  },
   default: 'vibe',
   pi: {
     piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd',
@@ -72,7 +77,9 @@ for (const preset of ['coding-leve', 'coding']) {
     meta: { cwd: 'C:\\Users\\danalec', agentPreset: preset },
   })
   const engine = handle.agent.constructor.name
-  out(`preset "${preset}" -> session ${String(id)} created; driver: ${engine}`)
+  const route = handle.agent.model?.current()
+  const named = route && route.model !== '' ? `${route.provider}/${route.model}` : 'none'
+  out(`preset "${preset}" -> session ${String(id)} created; driver: ${engine}; route: ${named}`)
   await handle.dispose()
 }
 

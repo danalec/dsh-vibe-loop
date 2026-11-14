@@ -234,7 +234,9 @@ test('a model call that returns nothing fails the turn', async () => {
   agent.dispose()
 })
 
-test('a model selection reaches the session', async () => {
+test('a model selection does not reach the session', async () => {
+  // The Vibe agent has a model of its own: the session's own selection is
+  // the session's record, never the route the Vibe session runs on.
   const { acp, agent } = createAgent({
     acp: {
       configOptions: [
@@ -243,15 +245,20 @@ test('a model selection reaches the session', async () => {
     },
   })
   agent.model.select({ provider: 'mistral', model: 'mistral-medium-3' })
-  await waitFor(() => acp.setOptions.length > 0, 2000, 'the model switch')
-  assert.deepEqual(acp.setOptions[0], { configId: 'model', value: 'mistral-medium-3' })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(acp.setOptions.length, 0, 'the session keeps the model it runs on')
   agent.dispose()
 })
 
-test('a model the session does not offer is not applied', async () => {
-  const { acp, agent } = createAgent()
-  agent.model.select({ provider: 'mistral', model: 'a-model-vibe-does-not-have' })
-  await new Promise(resolve => setTimeout(resolve, 100))
-  assert.equal(acp.setOptions.length, 0, 'the session keeps the model it runs on')
+test('a pinned route is recorded as the route that runs', () => {
+  // The durable selection names the route the child runs on, so the log and
+  // the frontend's projection never name a model the child did not use.
+  const { session, agent } = createAgent({
+    agentOptions: { provider: 'mistral', model: 'mistral-large-4-0-3' },
+  })
+  agent.model.select({ provider: 'mistral', model: 'mistral-medium-3' })
+  const selection = session.last('model/selection')
+  assert.ok(selection, 'the selection is recorded')
+  assert.equal(selection.data.model, 'mistral-large-4-0-3')
   agent.dispose()
 })

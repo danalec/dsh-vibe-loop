@@ -77,6 +77,15 @@ export interface VibeAgentOptions {
   /** Diagnostics sink. */
   logger?: (line: string) => void
   /**
+   * Whether the route belongs to the agent rather than to the session.
+   *
+   * A pinned route is the agent's own: the plugin names it, and the
+   * session's model selection never reaches the Vibe session. The model
+   * facade then records the route that actually runs, so the log and the
+   * frontend's projection never name a model the child did not use.
+   */
+  pinnedRoute?: boolean
+  /**
    * The DSH approval service.
    *
    * When the profile has one, Vibe's permission requests are decided by the
@@ -341,11 +350,12 @@ export class VibeAgent implements Agent {
     } satisfies VibeInboxNotifications)
     // The model facade is driver-owned: it records a durable `model/selection`
     // and reads the recorded choice back, so the frontend's model switcher and
-    // the session log agree on the route the next step will use. A selection
-    // also reaches the child: the Vibe session owns the route it runs on.
-    this.model = new VibeModel(this.session, this.options, (model) => {
-      void this.contain(() => this.applyModel(model))
-    })
+    // the session log agree on the route the next step will use.
+    //
+    // A pinned route is the agent's own: the Vibe session runs on the model
+    // the plugin names, and the facade records that route rather than a
+    // choice the child never applied.
+    this.model = new VibeModel(this.session, this.options, options.pinnedRoute ?? true)
     this.dispatch = agentEvents(options.ctx, this)
     this.unwatch = this.acp.onUpdate((update) => this.onAcpUpdate(update))
     // Vibe asks before it runs a tool. The decision goes through DSH's own
@@ -972,26 +982,6 @@ export class VibeAgent implements Agent {
     return action().catch((error: unknown) => {
       this.logger?.(`[vibe-loop] background action failed: ${String(error)}`)
     })
-  }
-
-  /**
-   * Switch the Vibe session to a model.
-   *
-   * The Vibe session has a catalog of its own: a model it does not offer
-   * is not applied, and the session keeps the model it runs on. The
-   * durable selection still records the choice, so the log and the
-   * frontend agree on what the session was asked to run.
-   *
-   * @param model - the model id to run on.
-   */
-  private async applyModel(model: string): Promise<void> {
-    const option = this.acp.configOptions.find((entry) => entry.id === 'model')
-    const offered = option?.options ?? []
-    if (option !== undefined && !offered.some((entry) => String(entry.value ?? '') === model)) {
-      this.logger?.(`[vibe-loop] the model "${model}" is not offered by the session`)
-      return
-    }
-    await this.acp.setOption('model', model)
   }
 
   /** Tear down: stop Vibe and unwind the scoped context. */

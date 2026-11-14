@@ -58,6 +58,10 @@ export function foldModelState(session: Session): ModelState {
  *
  * The recorded choice wins over the live options; a selection is durable
  * before it is visible.
+ *
+ * A pinned route is the agent's own: the Vibe session runs on the model the
+ * plugin names, and the session's own model selection is the session's
+ * record and never reaches the child.
  */
 export class VibeModel implements Model {
   private state: ModelState
@@ -66,34 +70,43 @@ export class VibeModel implements Model {
     private readonly session: Session,
     private readonly options: AgentOptions,
     /**
-     * Applies a selection to the child.
+     * Whether the route belongs to the agent rather than to the session.
      *
-     * The Vibe session owns the route, so a durable selection only takes
-     * effect when the session is switched to it. Without this the
-     * frontend's model switcher would record the choice and the run would
-     * keep using the model the child started with.
+     * A pinned route is the agent's own: the plugin names it, and the
+     * session's model selection never reaches the Vibe session. The durable
+     * selection then records the route that actually runs, so the session
+     * log and the frontend's projection agree with the child instead of
+     * reporting a choice that was never applied.
      */
-    private readonly applyRoute?: (model: string) => void,
+    private readonly pinned: boolean = true,
   ) {
     this.state = foldModelState(session)
   }
 
   /** The route the next step will use. */
   current(): Readonly<ModelSelection> | undefined {
+    if (this.pinned) return this.effective()
     const recorded = this.state.pending ?? this.state.lastUsed
     if (recorded !== null) return { ...recorded }
-    const { provider, model, reasoningEffort } = this.options
-    return provider && model ? toSelection(provider, model, reasoningEffort) : undefined
+    return this.effective()
   }
 
   /** Replace the next step's complete selection. */
   select(selection: Readonly<ModelSelection>): void {
-    const next = toSelection(selection.provider, selection.model, selection.reasoningEffort)
+    // A pinned route is the agent's own: the session's choice is recorded
+    // as the route that actually runs, so the log never names a model the
+    // Vibe session did not use.
+    const next = this.pinned
+      ? this.effective() ?? toSelection(selection.provider, selection.model, selection.reasoningEffort)
+      : toSelection(selection.provider, selection.model, selection.reasoningEffort)
     if (sameModelSelection(this.state.pending ?? this.state.lastUsed, next)) return
     const event = this.session.append('model/selection', next)
     this.state = { ...this.state, pending: event.data }
-    // The child owns the route: the durable selection becomes real only
-    // when the child is switched to it.
-    this.applyRoute?.(next.model)
+  }
+
+  /** The route the Vibe session runs on: the agent's own. */
+  private effective(): Readonly<ModelSelection> | undefined {
+    const { provider, model, reasoningEffort } = this.options
+    return provider && model ? toSelection(provider, model, reasoningEffort) : undefined
   }
 }
