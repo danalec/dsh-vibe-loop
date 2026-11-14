@@ -21,7 +21,7 @@
  *       config:
  *         vibePath: 'vibe-acp'             # or an absolute path
  *         cwd: '/path/to/your/project'
- *         # model: 'mistral-large-4-0-3'   # omit it: Vibe's own default
+ *         # no model: the session runs on the model vibe starts with
  *         pinModel: true
  *         debug: false
  * # Fall back to DSH's own loop: disable this entry and re-enable agent-loop.
