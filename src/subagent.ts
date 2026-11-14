@@ -18,7 +18,7 @@
  *
  * ```yaml
  * - id: subagent-vibe
- *   name: 'dsh-vibe-agent/subagent'
+ *   name: 'dsh-vibe-loop/subagent'
  *   config:
  *     providerName: vibe
  *     vibePath: 'vibe-acp'

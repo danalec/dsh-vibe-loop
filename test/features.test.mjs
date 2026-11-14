@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import { VibeAgent } from '../dist/vibe-agent.js'
-import { buildVibeHistory, buildVibeHistoryPrompt, renderVibeHistory } from '../dist/history.js'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { registerSessionProjections } from '../dist/index.js'
+import { buildVibeHistory, buildVibeHistoryPrompt, fitHistoryBudget, renderVibeHistory } from '../dist/history.js'
 import { FakeAcp, FakeSession } from './helpers.mjs'
 
 function createAgent(options = {}) {
@@ -190,4 +192,29 @@ test('an empty session renders no history', () => {
   const session = new FakeSession()
   assert.equal(buildVibeHistoryPrompt({ session }), '')
   assert.equal(renderVibeHistory([]), '')
+})
+
+test('the inbox projection is registered', async () => {
+  // The native loop owns this projection and this plugin replaces it: the
+  // frontend's queue dock reads it, so the key must be present.
+  const ctx = new Context()
+  await ctx.plugin(SessionProjectionRegistry)
+  await registerSessionProjections(ctx)
+  const keys = [...ctx.get('sessionProjections').summaryKeys()]
+  assert.ok(keys.includes('inbox'), 'the inbox projection is registered')
+  assert.ok(keys.includes('modelSelection'), 'the model selection projection is registered')
+  await ctx.fiber.dispose()
+})
+
+test('the history fits the context budget', () => {
+  // The transcript is the model's context: the provider refuses a request
+  // whose context does not fit the model's window.
+  const entries = []
+  for (let index = 0; index < 40; index += 1) {
+    entries.push({ role: 'assistant', text: `message ${index} ${'x'.repeat(400)}` })
+  }
+  const kept = fitHistoryBudget(entries, 4000)
+  const size = kept.reduce((sum, entry) => sum + entry.text.length, 0)
+  assert.ok(size <= 4000, `the transcript fits the budget (${size} chars)`)
+  assert.match(kept[kept.length - 1].text, /message 39/)
 })

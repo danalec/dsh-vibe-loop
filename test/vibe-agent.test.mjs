@@ -200,3 +200,58 @@ test('a prompt that produced nothing records the attempt, not a message', async 
   assert.equal(session.last('assistant/message'), undefined)
   agent.dispose()
 })
+test('the assistant frames carry a dense monotone revision', async () => {
+  const { ctx, agent } = createAgent({
+    acp: { replies: [[textChunk('a'), textChunk('b')]] },
+  })
+  const frames = []
+  ctx.on('agent/assistant-stream', (payload) => { frames.push(payload.frame) })
+
+  agent.send(userMessage('m1', 'hello'), 'next-turn', true)
+  await agent.whenIdle()
+
+  assert.deepEqual(frames.map(frame => frame.type), ['start', 'chunk', 'chunk', 'end'])
+  // DSH's session controller keeps only a frame whose revision is the
+  // successor of the last one it accepted: a gap drops the live stream.
+  assert.deepEqual(frames.map(frame => frame.revision), [1, 2, 3, 4])
+  assert.deepEqual(frames.filter(frame => frame.type === 'chunk').map(frame => frame.index), [0, 1])
+  agent.dispose()
+})
+
+test('a model call that returns nothing fails the turn', async () => {
+  const { ctx, session, agent } = createAgent({
+    acp: { replies: [[]] },
+  })
+  const errors = []
+  ctx.on('agent/error', (payload) => { errors.push(payload.error) })
+
+  agent.send(userMessage('m1', 'hello'), 'next-turn', true)
+  await agent.whenIdle()
+
+  assert.equal(session.ofType('assistant/message').length, 0, 'no empty answer is recorded')
+  assert.equal(session.last('turn/end').data.reason.kind, 'error')
+  assert.equal(errors.length, 1, 'the failure is reported at its live boundary')
+  agent.dispose()
+})
+
+test('a model selection reaches the session', async () => {
+  const { acp, agent } = createAgent({
+    acp: {
+      configOptions: [
+        { id: 'model', currentValue: 'mistral-large-4-0-3', options: [{ value: 'mistral-large-4-0-3' }, { value: 'mistral-medium-3' }] },
+      ],
+    },
+  })
+  agent.model.select({ provider: 'mistral', model: 'mistral-medium-3' })
+  await waitFor(() => acp.setOptions.length > 0, 2000, 'the model switch')
+  assert.deepEqual(acp.setOptions[0], { configId: 'model', value: 'mistral-medium-3' })
+  agent.dispose()
+})
+
+test('a model the session does not offer is not applied', async () => {
+  const { acp, agent } = createAgent()
+  agent.model.select({ provider: 'mistral', model: 'a-model-vibe-does-not-have' })
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(acp.setOptions.length, 0, 'the session keeps the model it runs on')
+  agent.dispose()
+})

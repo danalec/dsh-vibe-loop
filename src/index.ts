@@ -1,5 +1,5 @@
 /**
- * dsh-vibe-agent — DeepSeek Harness plugin that runs the Mistral Vibe agent
+ * dsh-vibe-loop — DeepSeek Harness plugin that runs the Mistral Vibe agent
  * inside DSH's frontend.
  *
  * The plugin registers an `AgentFactory` through `ctx.agents.setFactory`, so
@@ -17,7 +17,7 @@
  * # Use the Vibe loop for all new sessions.
  * - insert:
  *     - id: vibe-loop
- *       name: 'dsh-vibe-agent'
+ *       name: 'dsh-vibe-loop'
  *       config:
  *         vibePath: 'vibe-acp'             # or an absolute path
  *         cwd: '/path/to/your/project'
@@ -37,6 +37,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 import { VibeAgentFactory } from './factory.ts'
+import { inboxProjectionDefinition } from './inbox-projection.ts'
 
 export { VibeAcpClient } from './acp-client.ts'
 export type {
@@ -56,6 +57,7 @@ export type { VibeAgentOptions } from './vibe-agent.ts'
 export { buildVibeHistory, buildVibeHistoryPrompt, renderVibeHistory } from './history.ts'
 export type { BuildVibeHistoryOptions, VibeHistoryEntry } from './history.ts'
 export { VibeInbox, applyInboxSplice, foldInboxState } from './inbox.ts'
+export { inboxProjectionDefinition, inboxProjectionSchema } from './inbox-projection.ts'
 export type { VibeInboxNotifications, VibeInboxState } from './inbox.ts'
 export { VibeModel, foldModelState, sameModelSelection } from './model.ts'
 export type { ModelState } from './model.ts'
@@ -80,9 +82,57 @@ export const name = 'vibe-loop'
  * @returns a promise that settles when the projection is registered.
  */
 export function registerModelSelectionProjection(ctx: Context): Promise<unknown> {
-  return ctx.sessionProjections.register(modelSelectionProjectionDefinition).catch((error: unknown) => {
+  try {
+    return ctx.sessionProjections.register(modelSelectionProjectionDefinition).catch((error: unknown) => {
+      ctx.logger.warn(`vibe-loop: could not register the model selection projection: ${String(error)}`)
+    })
+  } catch (error: unknown) {
     ctx.logger.warn(`vibe-loop: could not register the model selection projection: ${String(error)}`)
-  })
+    return Promise.resolve()
+  }
+}
+
+/**
+ * Register the `inbox` projection — the session's pending input.
+ *
+ * The native loop (`@deepseek-ai/dsh-agent-loop`) owns this projection, and
+ * this plugin replaces that plugin: with the native loop disabled, nothing
+ * else registers the key, and the frontend's queue dock — which reads
+ * `projections.faceOf('inbox')` — has nothing to render.
+ *
+ * @returns a promise that settles when the projection is registered.
+ */
+export function registerInboxProjection(ctx: Context): Promise<unknown> {
+  try {
+    return ctx.sessionProjections.register(inboxProjectionDefinition).catch((error: unknown) => {
+      ctx.logger.warn(`vibe-loop: could not register the inbox projection: ${String(error)}`)
+    })
+  } catch (error: unknown) {
+    ctx.logger.warn(`vibe-loop: could not register the inbox projection: ${String(error)}`)
+    return Promise.resolve()
+  }
+}
+
+/**
+ * Register every session projection this loop owns.
+ *
+ * A router that owns the agent-factory slot registers both through this
+ * helper: the model route and the pending queue are the same for every
+ * engine, so one registration covers them all.
+ *
+ * @returns a promise that settles when the projections are registered.
+ */
+export async function registerSessionProjections(ctx: Context): Promise<void> {
+  try {
+    await Promise.all([
+      registerModelSelectionProjection(ctx),
+      registerInboxProjection(ctx),
+    ])
+  } catch (error: unknown) {
+    // A rejected registration must never escape: the caller fires and
+    // forgets, and an unhandled rejection ends the host process.
+    ctx.logger.warn(`vibe-loop: could not register the session projections: ${String(error)}`)
+  }
 }
 
 /**
@@ -129,7 +179,16 @@ export interface Config {
    * everything.
    */
   mode?: 'ask' | 'accept-edits' | 'smart-approve' | 'auto-approve'
-  /** Protocol diagnostics; appended to `<tmpdir>/dsh-vibe-agent.log`. */
+  /**
+   * Byte budget for the history transcript handed to a fresh session.
+   *
+   * The transcript is the model's context: a session whose log grew past
+   * the budget is handed over with its oldest messages dropped, the way
+   * the native loop compacts — without it the provider refuses the
+   * request and every answer comes back empty.
+   */
+  historyBudgetBytes?: number
+  /** Protocol diagnostics; appended to `<tmpdir>/dsh-vibe-loop.log`. */
   debug?: boolean
 }
 
@@ -141,11 +200,12 @@ export const Config = z.object({
   pinModel: z.boolean(),
   permission: z.union(['dsh', 'allow-once', 'deny']),
   mode: z.union(['ask', 'accept-edits', 'smart-approve', 'auto-approve']),
+  historyBudgetBytes: z.number(),
   debug: z.boolean(),
 }) as unknown as z<Config>
 
 /** Name of the diagnostics file inside the platform temp directory. */
-export const DEBUG_LOG_FILE = 'dsh-vibe-agent.log'
+export const DEBUG_LOG_FILE = 'dsh-vibe-loop.log'
 
 /**
  * Register the Vibe agent factory.
@@ -184,6 +244,9 @@ export function apply(ctx: Context, config: Config): () => void {
         pinModel: config.pinModel,
         ...(config.permission === undefined ? {} : { permission: config.permission }),
         ...(config.mode === undefined ? {} : { mode: config.mode }),
+        ...(config.historyBudgetBytes === undefined
+          ? {}
+          : { historyBudgetBytes: config.historyBudgetBytes }),
         logger,
         trace: debug ? trace : undefined,
       },
@@ -192,12 +255,12 @@ export function apply(ctx: Context, config: Config): () => void {
     const dispose = ctx.agents.setFactory(factory)
     trace('factory registered (vibe loop active)')
     // The frontend reads a session's model from the standard `modelSelection`
-    // projection. Registering it is asynchronous and the factory does not
+    // projection and its pending queue from the `inbox` projection. The
+    // native loop owns both, and this plugin replaces it, so it registers
+    // them itself. Registration is asynchronous and the factory does not
     // depend on it (the agent owns its own durable selection), so it runs in
     // the background.
-    void ctx.sessionProjections.register(modelSelectionProjectionDefinition).catch((error: unknown) => {
-      ctx.logger.warn(`vibe-loop: could not register the model selection projection: ${String(error)}`)
-    })
+    void registerSessionProjections(ctx)
     return dispose
   } catch (error: unknown) {
     trace(`apply failed: ${String(error)}`)

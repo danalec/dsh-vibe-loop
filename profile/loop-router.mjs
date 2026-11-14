@@ -39,7 +39,7 @@ import { appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PiAgentFactory, registerModelSelectionProjection as registerPiProjection } from 'dsh-pi-loop'
-import { VibeAgentFactory, registerModelSelectionProjection as registerVibeProjection } from 'dsh-vibe-agent'
+import { VibeAgentFactory, registerSessionProjections as registerVibeProjections } from 'dsh-vibe-loop'
 
 export const name = 'loop-router'
 
@@ -85,7 +85,7 @@ async function readPreset(ctx, sessionId) {
 }
 
 /** Name of the diagnostics file inside the platform temp directory. */
-export const DEBUG_LOG_FILE = 'dsh-vibe-agent.log'
+export const DEBUG_LOG_FILE = 'dsh-vibe-loop.log'
 
 export function apply(ctx, config) {
   const presets = config?.presets ?? {}
@@ -144,7 +144,7 @@ export function apply(ctx, config) {
   // The frontend reads a session's model from the standard model-selection
   // projection; the router owns the factory slot, so it registers it.
   void registerPiProjection(ctx)
-  void registerVibeProjection(ctx)
+  void registerVibeProjections(ctx)
 
   const dispose = ctx.agents.setFactory(factory)
   trace(`registered (presets ${Object.keys(presets).join(', ') || 'none'}; default ${fallback})`)

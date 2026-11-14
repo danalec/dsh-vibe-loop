@@ -267,6 +267,18 @@ export class VibeAgent implements Agent {
   private attemptId: LlmAttemptId | undefined
   /** Monotone revision of the assistant attempts of this agent. */
   private attemptRevision = 0
+  /** The failure of the last model call, when the model returned nothing. */
+  private modelError: Error | undefined
+  /**
+   * Monotone revision of the assistant frames of this agent lifecycle.
+   *
+   * DSH's session controller accepts an assistant frame only when its
+   * revision is the successor of the last one it took (`revision + 1`), so
+   * the revision is allocated per FRAME, not per attempt: a per-attempt
+   * revision would make every chunk after the first one a gap, and the
+   * controller would drop the whole live stream.
+   */
+  private frameRevision = 0
   /** Number of chunk frames published for the current attempt. */
   private chunkIndex = 0
   /** Whether the current attempt already published its `start` frame. */
@@ -329,8 +341,11 @@ export class VibeAgent implements Agent {
     } satisfies VibeInboxNotifications)
     // The model facade is driver-owned: it records a durable `model/selection`
     // and reads the recorded choice back, so the frontend's model switcher and
-    // the session log agree on the route the next step will use.
-    this.model = new VibeModel(this.session, this.options)
+    // the session log agree on the route the next step will use. A selection
+    // also reaches the child: the Vibe session owns the route it runs on.
+    this.model = new VibeModel(this.session, this.options, (model) => {
+      void this.contain(() => this.applyModel(model))
+    })
     this.dispatch = agentEvents(options.ctx, this)
     this.unwatch = this.acp.onUpdate((update) => this.onAcpUpdate(update))
     // Vibe asks before it runs a tool. The decision goes through DSH's own
@@ -461,7 +476,7 @@ export class VibeAgent implements Agent {
       step: 0,
       wakeRequested: false,
     })
-    void this.kick().then(driver.resolve, driver.reject)
+    void this.contain(() => this.kick()).then(driver.resolve, driver.reject)
   }
 
   /** Drain turns until the queue is empty. */
@@ -581,7 +596,11 @@ export class VibeAgent implements Agent {
   private throwError(error: unknown): never {
     const turn = this.phase.kind === 'running' ? this.phase.turn : this.turn
     const step = this.phase.kind === 'running' ? this.phase.step : this.step
-    this.dispatch.emit('agent/error', { turn, step, error })
+    // A model failure is already published at its live boundary; the turn
+    // boundary carries it from there.
+    if (error !== this.modelError) {
+      this.dispatch.emit('agent/error', { turn, step, error })
+    }
     throw error
   }
 
@@ -672,14 +691,28 @@ export class VibeAgent implements Agent {
       blocks.push({ type: 'text', text: this.historyPrompt })
     }
     blocks.push(...content)
-    const result = await this.acp.prompt(blocks)    // The prompt may have produced nothing at all (a cancelled turn): the
-    // assistant message is then absent, and DSH records the attempt instead.
+    const result = await this.acp.prompt(blocks)
+    // The prompt may have produced nothing at all: a cancelled turn, or a
+    // model that refused the request (a context window that does not fit,
+    // a rejected request). The assistant message is then absent, and DSH
+    // records the attempt instead.
+    //
+    // A turn that was cancelled is a cancellation, not a failure. A turn
+    // that produced nothing and was not cancelled is a failed model call:
+    // it is reported and the turn closes with an error reason, so the
+    // chat does not show a completed turn holding an empty answer.
     // A turn that only ran tools still has to carry a message: the format
     // wants every tool call advertised by an assistant message.
     if (this.assistantText === '' && this.assistantReasoning === '' && this.pendingToolEvents.length === 0) {
       const stream: AssistantStreamRecord[] = [...this.stream.snapshot()]
       if (stream.length > 0) {
         this.session.append('assistant/attempt', { turn, step, stream })
+      }
+      if (this.phase.kind !== 'idle' && !this.phase.abort.signal.aborted) {
+        const failure = new Error('the model returned no answer')
+        this.modelError = failure
+        this.dispatch.emit('agent/error', { turn, step, error: failure })
+        throw failure
       }
       return
     }
@@ -718,7 +751,7 @@ export class VibeAgent implements Agent {
         frame: {
           type: 'end',
           attemptId,
-          revision: this.attemptRevision,
+          revision: this.nextFrameRevision(),
           index: this.chunkIndex,
           outcome: { kind: 'committed', eventType: 'assistant/message', seq: committed.seq },
         },
@@ -761,6 +794,7 @@ export class VibeAgent implements Agent {
   /** Start a fresh assistant attempt (one Vibe turn). */
   private resetAttempt(): void {
     this.stream = new AssistantStreamAccumulator()
+    this.modelError = undefined
     this.attemptRevision += 1
     this.attemptId = LlmAttemptId(`${this.id}:${this.attemptRevision}`)
     this.chunkIndex = 0
@@ -890,7 +924,7 @@ export class VibeAgent implements Agent {
       frame: {
         type: 'start',
         attemptId,
-        revision: this.attemptRevision,
+        revision: this.nextFrameRevision(),
         turn: this.turn,
         step: this.step,
       },
@@ -906,13 +940,58 @@ export class VibeAgent implements Agent {
       frame: {
         type: 'chunk',
         attemptId,
-        revision: this.attemptRevision,
+        revision: this.nextFrameRevision(),
         index: this.chunkIndex,
         time,
         chunk,
       },
     })
     this.chunkIndex += 1
+  }
+
+  /**
+   * Allocate the next assistant frame revision.
+   *
+   * @returns the dense successor of the last emitted frame revision.
+   */
+  private nextFrameRevision(): number {
+    this.frameRevision += 1
+    return this.frameRevision
+  }
+
+  /**
+   * Run a background action whose failure must never reach the process.
+   *
+   * A rejected promise nobody awaits is an unhandled rejection, and Node
+   * ends the process on one. The DSH host runs this driver, so a rejection
+   * that escaped here would kill the host with the session still open — the
+   * application would crash and stop driving the sessions. Every background
+   * action of this driver goes through this helper.
+   */
+  private contain(action: () => Promise<void>): Promise<void> {
+    return action().catch((error: unknown) => {
+      this.logger?.(`[vibe-loop] background action failed: ${String(error)}`)
+    })
+  }
+
+  /**
+   * Switch the Vibe session to a model.
+   *
+   * The Vibe session has a catalog of its own: a model it does not offer
+   * is not applied, and the session keeps the model it runs on. The
+   * durable selection still records the choice, so the log and the
+   * frontend agree on what the session was asked to run.
+   *
+   * @param model - the model id to run on.
+   */
+  private async applyModel(model: string): Promise<void> {
+    const option = this.acp.configOptions.find((entry) => entry.id === 'model')
+    const offered = option?.options ?? []
+    if (option !== undefined && !offered.some((entry) => String(entry.value ?? '') === model)) {
+      this.logger?.(`[vibe-loop] the model "${model}" is not offered by the session`)
+      return
+    }
+    await this.acp.setOption('model', model)
   }
 
   /** Tear down: stop Vibe and unwind the scoped context. */

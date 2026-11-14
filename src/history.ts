@@ -22,7 +22,26 @@ export interface BuildVibeHistoryOptions {
   session: Session
   /** How many of the last events to render. */
   limit?: number
+  /**
+   * Byte budget for the rendered transcript.
+   *
+   * The transcript is the model's context: the provider refuses a request
+   * whose context does not fit the model's window. The budget keeps the
+   * transcript inside it, the way the native loop compacts.
+   *
+   * Defaults to {@link DEFAULT_HISTORY_BUDGET_BYTES}.
+   */
+  budgetBytes?: number
 }
+
+/**
+ * Default byte budget for the rendered transcript.
+ *
+ * The provider rejects the request well before this size — a transcript
+ * with one oversized tool result is enough. The budget leaves room for
+ * the model's own context window.
+ */
+export const DEFAULT_HISTORY_BUDGET_BYTES = 1_048_576
 
 /** One rendered line of the transcript. */
 export interface VibeHistoryEntry {
@@ -71,7 +90,35 @@ export function buildVibeHistory(options: BuildVibeHistoryOptions): VibeHistoryE
     }
   }
   const limit = options.limit ?? 200
-  return entries.length > limit ? entries.slice(entries.length - limit) : entries
+  const kept = entries.length > limit ? entries.slice(entries.length - limit) : entries
+  return fitHistoryBudget(kept, options.budgetBytes ?? DEFAULT_HISTORY_BUDGET_BYTES)
+}
+
+/**
+ * Cut the transcript down to the byte budget, oldest entries first.
+ *
+ * The transcript carries the model's context, and the provider refuses a
+ * request whose context does not fit the model's window. The oldest
+ * entries go first, the way the native loop compacts.
+ *
+ * @param entries - the rendered entries, oldest first.
+ * @param budget - the byte budget for the rendered transcript.
+ * @returns the kept entries.
+ */
+export function fitHistoryBudget(
+  entries: readonly VibeHistoryEntry[],
+  budget: number,
+): VibeHistoryEntry[] {
+  const sizes = entries.map((entry) => entry.text.length)
+  const total = sizes.reduce((sum, size) => sum + size, 0)
+  if (total <= budget) return [...entries]
+  let start = 0
+  let keptSize = total
+  while (start < entries.length && keptSize > budget) {
+    keptSize -= sizes[start]
+    start += 1
+  }
+  return entries.slice(start)
 }
 
 /** Extract the text of a user message's content blocks. */

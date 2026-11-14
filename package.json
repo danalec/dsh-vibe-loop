@@ -1,5 +1,5 @@
 {
-  "name": "dsh-vibe-agent",
+  "name": "dsh-vibe-loop",
   "version": "0.1.0",
   "description": "Run the Mistral Vibe agent (vibe-acp, Agent Client Protocol) as the agent loop inside DeepSeek Harness (@deepseek-ai/dsh): drive vibe-acp from the official DSH web UI, with the session log, hooks and presets unchanged.",
   "type": "module",
@@ -29,7 +29,8 @@
     "lint": "eslint src test eslint.config.js"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.19.0"
+    "@deepseek-ai/schemastery": "^3.19.0",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
@@ -88,8 +89,8 @@
   "author": "Micheleww",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danalec/dsh-vibe-agent.git"
+    "url": "git+https://github.com/danalec/dsh-vibe-loop.git"
   },
-  "homepage": "https://github.com/danalec/dsh-vibe-agent#readme",
-  "bugs": "https://github.com/danalec/dsh-vibe-agent/issues"
+  "homepage": "https://github.com/danalec/dsh-vibe-loop#readme",
+  "bugs": "https://github.com/danalec/dsh-vibe-loop/issues"
 }

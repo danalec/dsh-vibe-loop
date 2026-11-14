@@ -1,4 +1,4 @@
-# dsh-vibe-agent
+# dsh-vibe-loop
 
 [English](README.md) | Português (BR)
 
@@ -13,7 +13,7 @@ mudança.
 ```
 Frontend do DSH (sessões, hooks, presets, persistência JSONL, web UI)
         │
-dsh-vibe-agent  (este plugin: AgentFactory + tradução de eventos + vínculo de sessão)
+dsh-vibe-loop  (este plugin: AgentFactory + tradução de eventos + vínculo de sessão)
         │  spawn + JSON-RPC over stdio
         │  initialize / session/new / session/load / session/prompt / session/cancel
         ▼
@@ -77,7 +77,7 @@ devolve a resposta final.
 ```yaml
 - insert:
     - id: subagent-vibe
-      name: 'dsh-vibe-agent/subagent'
+      name: 'dsh-vibe-loop/subagent'
       config:
         providerName: vibe
         vibePath: 'vibe-acp'
@@ -105,7 +105,7 @@ O preset é o registro durável da escolha do próprio DSH — ele fica no heade
 `profile/loop-router.mjs` é esse roteador. Ele é um arquivo comum (e não um pacote) porque importa os dois motores, e um arquivo dentro do profile resolve os dois pelo `node_modules` do profile (onde os dois plugins são linkados):
 
 ```yaml
-# ~/.dsh/profiles/desktop/dsh/loop-router.mjs  ->  importa dsh-pi-loop e dsh-vibe-agent
+# ~/.dsh/profiles/desktop/dsh/loop-router.mjs  ->  importa dsh-pi-loop e dsh-vibe-loop
 - insert:
     - id: loop-router
       name: 'file:///C:/Users/danalec/.dsh/profiles/desktop/dsh/loop-router.mjs'
@@ -159,10 +159,10 @@ checkout local é instalado como qualquer outra dependência:
 ```bash
 # Linka a árvore de trabalho: o profile sempre roda seu checkout (recompile e
 # reinicie o DSH). Este é o setup de desenvolvimento.
-dsh plugin --profile desktop add link:/path/to/dsh-vibe-agent
+dsh plugin --profile desktop add link:/path/to/dsh-vibe-loop
 
 # Ou instala uma cópia do diretório (o que `npm pack` produziria).
-dsh plugin --profile desktop add file:/path/to/dsh-vibe-agent
+dsh plugin --profile desktop add file:/path/to/dsh-vibe-loop
 ```
 
 ## Uso
@@ -179,7 +179,7 @@ entrada que já existe:
 
 - insert:
     - id: vibe-loop
-      name: 'dsh-vibe-agent'
+      name: 'dsh-vibe-loop'
       config:
         vibePath: 'vibe-acp'            # ou um caminho absoluto
         cwd: '/path/to/your/project'    # diretório de trabalho das sessões Vibe
@@ -204,7 +204,7 @@ entrada que já existe:
 | `pinModel` | `boolean` | `false` | sempre usar `model`, ignorando a rota pedida pelo DSH |
 | `permission` | `'dsh' \| 'allow-once' \| 'deny'` | `'dsh'` | como responder aos pedidos de permissão de tool: pela cadeia de aprovação do DSH, uma vez por chamada, ou recusando. Concessão permanente nunca é dada |
 | `mode` | `'ask' \| 'accept-edits' \| 'smart-approve' \| 'auto-approve'` | `'ask'` | o modo da sessão Vibe. `ask` é o que deixa a cadeia de aprovação decidir; o padrão do Vibe (`accept-edits`) aprovaria edições sem o DSH ver |
-| `debug` | `boolean` | `false` | anexa diagnósticos do protocolo em `<tmpdir>/dsh-vibe-agent.log` |
+| `debug` | `boolean` | `false` | anexa diagnósticos do protocolo em `<tmpdir>/dsh-vibe-loop.log` |
 
 ## Ciclo de vida da sessão
 
@@ -235,7 +235,7 @@ entrada que já existe:
 | `vibe-acp process failed to start` | o executável não está no `PATH` | aponte `vibePath` para o caminho absoluto |
 | `vibe session does not offer the model "…"` | o id de modelo não é um dos que a sessão oferece | veja os ids que o Vibe lista para a opção `model` |
 | O turno retomado não tem contexto | a sessão Vibe sumiu e uma nova foi iniciada | veja o diagnóstico: `session] loaded` ou `session] new` |
-| Sem diagnósticos | `debug` está desligado | ligue `debug: true` e leia `%TEMP%/dsh-vibe-agent.log` |
+| Sem diagnósticos | `debug` está desligado | ligue `debug: true` e leia `%TEMP%/dsh-vibe-loop.log` |
 
 ## Desenvolvimento
 

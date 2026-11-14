@@ -65,6 +65,15 @@ export class VibeModel implements Model {
   constructor(
     private readonly session: Session,
     private readonly options: AgentOptions,
+    /**
+     * Applies a selection to the child.
+     *
+     * The Vibe session owns the route, so a durable selection only takes
+     * effect when the session is switched to it. Without this the
+     * frontend's model switcher would record the choice and the run would
+     * keep using the model the child started with.
+     */
+    private readonly applyRoute?: (model: string) => void,
   ) {
     this.state = foldModelState(session)
   }
@@ -83,5 +92,8 @@ export class VibeModel implements Model {
     if (sameModelSelection(this.state.pending ?? this.state.lastUsed, next)) return
     const event = this.session.append('model/selection', next)
     this.state = { ...this.state, pending: event.data }
+    // The child owns the route: the durable selection becomes real only
+    // when the child is switched to it.
+    this.applyRoute?.(next.model)
   }
 }

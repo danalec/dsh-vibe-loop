@@ -1,4 +1,4 @@
-# dsh-vibe-agent
+# dsh-vibe-loop
 
 English | [Português (BR)](README.pt-BR.md)
 
@@ -12,7 +12,7 @@ frontend — session log, hooks, presets, web UI — works unchanged.
 ```
 DSH frontend (sessions, hooks, presets, JSONL persistence, web UI)
         │
-dsh-vibe-agent  (this plugin: AgentFactory + event translation + session link)
+dsh-vibe-loop  (this plugin: AgentFactory + event translation + session link)
         │  spawn + JSON-RPC over stdio
         │  initialize / session/new / session/load / session/prompt / session/cancel
         ▼
@@ -92,7 +92,7 @@ task as one prompt and returns the final answer.
 ```yaml
 - insert:
     - id: subagent-vibe
-      name: 'dsh-vibe-agent/subagent'
+      name: 'dsh-vibe-loop/subagent'
       config:
         providerName: vibe
         vibePath: 'vibe-acp'
@@ -130,7 +130,7 @@ resolves them from the profile's `node_modules` (where both plugins are
 linked):
 
 ```yaml
-# ~/.dsh/profiles/desktop/dsh/loop-router.mjs  ->  imports dsh-pi-loop and dsh-vibe-agent
+# ~/.dsh/profiles/desktop/dsh/loop-router.mjs  ->  imports dsh-pi-loop and dsh-vibe-loop
 - insert:
     - id: loop-router
       name: 'file:///C:/Users/danalec/.dsh/profiles/desktop/dsh/loop-router.mjs'
@@ -234,10 +234,10 @@ installed like any other dependency:
 ```bash
 # Link the working tree: the profile always runs your checkout (rebuild, then
 # restart DSH). This is the development setup.
-dsh plugin --profile desktop add link:/path/to/dsh-vibe-agent
+dsh plugin --profile desktop add link:/path/to/dsh-vibe-loop
 
 # Or install a copy of the directory (what `npm pack` would produce).
-dsh plugin --profile desktop add file:/path/to/dsh-vibe-agent
+dsh plugin --profile desktop add file:/path/to/dsh-vibe-loop
 ```
 
 Both write the dependency into the profile's `package.json`; DSH then resolves
@@ -259,7 +259,7 @@ already exists:
 # Use the Vibe loop for all new sessions.
 - insert:
     - id: vibe-loop
-      name: 'dsh-vibe-agent'
+      name: 'dsh-vibe-loop'
       config:
         vibePath: 'vibe-acp'            # or an absolute path
         cwd: '/path/to/your/project'    # working directory for Vibe sessions
@@ -284,7 +284,7 @@ already exists:
 | `pinModel` | `boolean` | `false` | Always use `model`, ignoring the route DSH requests for a session |
 | `permission` | `'dsh' \| 'allow-once' \| 'deny'` | `'dsh'` | How Vibe's tool permission requests are answered: through DSH's own approval chain, once per call, or refused. A standing grant is never given |
 | `mode` | `'ask' \| 'accept-edits' \| 'smart-approve' \| 'auto-approve'` | `'ask'` | The Vibe session mode. `ask` is what lets the approval chain decide; Vibe's own default (`accept-edits`) would approve file edits behind DSH's back |
-| `debug` | `boolean` | `false` | Append protocol diagnostics to `<tmpdir>/dsh-vibe-agent.log` |
+| `debug` | `boolean` | `false` | Append protocol diagnostics to `<tmpdir>/dsh-vibe-loop.log` |
 
 ### Mounting rules
 
@@ -328,13 +328,13 @@ Two rules decide whether the plugin comes up:
 | `vibe session does not offer the model "…"` | the model id is not one the session offers | check the ids Vibe lists for the `model` option |
 | The resumed turn has no context | the Vibe session was gone and a fresh one was started | check the diagnostics for `session] loaded` vs `session] new`; the transcript is handed over with the first prompt |
 | Every tool is refused | the approval chain has no answerer (the profile has no approval UI) and the session policy is `ask` | set `permission: 'allow-once'`, or compose an approval answerer in the profile |
-| No diagnostics | `debug` is off | set `debug: true` and read `%TEMP%/dsh-vibe-agent.log` |
+| No diagnostics | `debug` is off | set `debug: true` and read `%TEMP%/dsh-vibe-loop.log` |
 
 ## Debugging
 
 Set `debug: true`: every RPC command, every ACP update, the child-process
 exit and the factory lifecycle steps are appended to
-`<tmpdir>/dsh-vibe-agent.log` (`%TEMP%` on Windows, `/tmp` elsewhere). Vibe's
+`<tmpdir>/dsh-vibe-loop.log` (`%TEMP%` on Windows, `/tmp` elsewhere). Vibe's
 own stderr is forwarded into the same log. With `debug` off no sink is
 installed at all — the protocol layer formats no diagnostics and touches no
 disk.

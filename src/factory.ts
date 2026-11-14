@@ -36,6 +36,7 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { VibeAcpClient } from './acp-client.ts'
 import { VibeAgent } from './vibe-agent.ts'
 import { buildVibeHistoryPrompt } from './history.ts'
+import { foldModelState } from './model.ts'
 import { readVibeSessionId, writeVibeSessionId } from './vibe-session.ts'
 
 /** Why the session lifecycle began. */
@@ -77,6 +78,15 @@ export interface VibeFactoryOptions {
   mode?: 'ask' | 'accept-edits' | 'smart-approve' | 'auto-approve'
   /** Diagnostics sink; omit to keep quiet. */
   logger?: (line: string) => void
+  /**
+   * Byte budget for the history transcript handed to a fresh session.
+   *
+   * The transcript is the model's context: a session whose log grew past
+   * the budget is handed over with its oldest messages dropped, the way
+   * the native loop compacts — without it the provider refuses the
+   * request and every answer comes back empty.
+   */
+  historyBudgetBytes?: number
   /** Lifecycle trace sink (apply/createAgent/resume); omit to keep quiet. */
   trace?: (line: string) => void
 }
@@ -277,7 +287,14 @@ export class VibeAgentFactory implements AgentFactory {
   /**
    * Resolve the model route for one agent.
    */
-  private resolveRoute(requested: AgentOptions | undefined): ResolvedRoute {
+  private resolveRoute(requested: AgentOptions | undefined, session?: Session): ResolvedRoute {
+    // A session records the model it was switched to. The recorded choice
+    // wins over the profile default, so a resumed session keeps the model
+    // the user picked instead of falling back to the default.
+    const recorded = session === undefined ? null : foldModelState(session).pending
+    if (recorded !== null) {
+      return resolveVibeRoute(this.options.model, { provider: recorded.provider, model: recorded.model })
+    }
     return resolveVibeRoute(this.options.model, this.options.pinModel === true ? undefined : requested)
   }
 
@@ -298,7 +315,7 @@ export class VibeAgentFactory implements AgentFactory {
     if (signal?.aborted) throw new Error(`agent "${id}" creation aborted`)
 
     const requested = agentOptions
-    const { route, provider, model } = this.resolveRoute(requested)
+    const { route, provider, model } = this.resolveRoute(requested, session)
 
     const permission = this.options.permission ?? 'dsh'
     const acp = new VibeAcpClient({
@@ -366,7 +383,13 @@ export class VibeAgentFactory implements AgentFactory {
     // first prompt, so the model continues where the log says it was.
     const historyPrompt = reloaded
       ? undefined
-      : buildVibeHistoryPrompt({ session, limit: 200 })
+      : buildVibeHistoryPrompt({
+        session,
+        limit: 200,
+        ...(this.options.historyBudgetBytes === undefined
+          ? {}
+          : { budgetBytes: this.options.historyBudgetBytes }),
+      })
 
     const agent = new VibeAgent({
       ctx: this.registryCtx,
