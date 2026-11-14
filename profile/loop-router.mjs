@@ -22,13 +22,14 @@
  *     engine: vibe
  *   research:
  *     engine: pi
- *     model: 'zai/glm-5.3-flash' # the model this preset runs on
+ *     model: 'anthropic/claude-sonnet-4-5' # the model this preset runs on
  *     thinking: 'high'           # the thinking level it runs on
  * ```
  *
  * The model belongs to the preset, so the route travels with the preset's
  * decision: a session created with a preset runs on that preset's model.
- * The engine's own `model:` is the default for a preset that names none.
+ * The engine names no model: the choice is the user's, and a preset that
+ * names one decides for its own sessions.
  *
  * Install this file INTO the profile (for example
  * `~/.dsh/profiles/desktop/dsh/loop-router.mjs`): its imports of the two
@@ -46,10 +47,10 @@
  *         default: pi
  *         pi:
  *           piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd'
- *           model: 'anthropic/claude-sonnet-4-5'
+ *           # no model: the child runs on the model the user chose in pi
  *         vibe:
  *           vibePath: 'C:\\Users\\danalec\\AppData\\Local\\Microsoft\\WinGet\\Links\\vibe-acp.exe'
- *           model: 'mistral-large-4'
+ *           # no model: the session runs on the model vibe starts with
  * ```
  */
 
