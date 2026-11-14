@@ -21,7 +21,7 @@
  *       config:
  *         vibePath: 'vibe-acp'             # or an absolute path
  *         cwd: '/path/to/your/project'
- *         model: 'mistral-large-4-0-3'     # the Vibe model id
+ *         # model: 'mistral-large-4-0-3'   # omit it: Vibe's own default
  *         pinModel: true
  *         debug: false
  * # Fall back to DSH's own loop: disable this entry and re-enable agent-loop.
@@ -152,7 +152,12 @@ export interface Config {
   vibeArgs?: string[]
   /** Working directory for Vibe sessions. Defaults to process.cwd(). */
   cwd?: string
-  /** Vibe model id (for example `mistral-large-4`). */
+  /**
+   * The Vibe session's model (for example `mistral-large-4`).
+   *
+   * Omit it and the session runs on the model Vibe itself starts with:
+   * the plugin stipulates no model of its own.
+   */
   model?: string
   /**
    * Always use `model`, ignoring the route DSH requests for a session.

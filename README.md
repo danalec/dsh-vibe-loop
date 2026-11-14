@@ -294,7 +294,7 @@ already exists:
 | `vibePath` | `string` | `'vibe-acp'` | `vibe-acp` executable; resolved from `PATH` |
 | `vibeArgs` | `string[]` | `[]` | Extra arguments passed to the executable |
 | `cwd` | `string` | `process.cwd()` | Working directory for Vibe sessions (a session's own `cwd` wins) |
-| `model` | `string` | — | Vibe model id (for example `mistral-large-4`) |
+| `model` | `string` | — | The Vibe session's model (for example `mistral-large-4`). Omit it and the session runs on the model Vibe starts with: **the plugin stipulates no model** |
 | `pinModel` | `boolean` | `true` | Always use `model`, ignoring the route the session asks for. The Vibe agent has a model of its own: the session's own model selection is the session's record and never reaches the child |
 | `permission` | `'dsh' \| 'allow-once' \| 'deny'` | `'dsh'` | How Vibe's tool permission requests are answered: through DSH's own approval chain, once per call, or refused. A standing grant is never given |
 | `mode` | `'ask' \| 'accept-edits' \| 'smart-approve' \| 'auto-approve'` | `'ask'` | The Vibe session mode. `ask` is what lets the approval chain decide; Vibe's own default (`accept-edits`) would approve file edits behind DSH's back |

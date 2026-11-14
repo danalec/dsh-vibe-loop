@@ -49,7 +49,12 @@ export interface VibeFactoryOptions {
   vibeArgs?: string[]
   /** Working directory for Vibe sessions (defaults to process.cwd()). */
   cwd: string
-  /** Vibe model id (for example `mistral-large-4`). */
+  /**
+   * The Vibe session's model (for example `mistral-large-4`).
+   *
+   * Omit it and the session runs on the model Vibe itself starts with:
+   * the plugin stipulates no model of its own.
+   */
   model?: string
   /**
    * Ignore the route DSH requests for a session and always use `model`.
@@ -99,7 +104,12 @@ export interface ResolvedRoute {
   model: string
 }
 
-/** The provider that owns every Vibe model id. */
+/**
+ * The provider that owns every Vibe model id.
+ *
+ * Vibe serves one provider, so a model id without one names it. This is
+ * a fact about Vibe, not a choice of a model.
+ */
 export const DEFAULT_PROVIDER = 'mistral'
 
 /**
@@ -348,6 +358,10 @@ export class VibeAgentFactory implements AgentFactory {
     }
     writeVibeSessionId(String(id), vibeSessionId, cwd)
 
+    // The model the session runs on. The plugin stipulates none: with no
+    // model configured, the session keeps the one Vibe started with.
+    const sessionModel = model !== '' ? model : (acp.optionCurrent('model') ?? '')
+
     // The model is a session option on Vibe's side: apply it when the
     // session offers it, and fail loudly when it does not (a route Vibe
     // refuses would silently run another model).
@@ -398,7 +412,9 @@ export class VibeAgentFactory implements AgentFactory {
         ...agentOptions,
         // Only fill route fields the caller did not provide.
         ...(provider !== '' && requested?.provider === undefined ? { provider } : {}),
-        ...(model !== '' && requested?.model === undefined ? { model } : {}),
+        // The model the session actually runs on: the one that was asked
+        // for, or the one Vibe started with when the plugin named none.
+        ...(sessionModel !== '' && requested?.model === undefined ? { model: sessionModel } : {}),
       },
       acp,
       // Continue the session's turn sequence: a resumed session must not
