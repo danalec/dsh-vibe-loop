@@ -40,7 +40,7 @@ await ctx.plugin({
   apply: router.apply,
 }, {
   presets: {
-    coding: { engine: 'pi', model: 'zai/glm-5.3-flash' },
+    coding: { engine: 'pi', model: 'minimax/MiniMax-M3.1-Flash', thinking: 'high' },
     'coding-leve': { engine: 'vibe', model: 'mistral-large-4' },
   },
   default: 'vibe',
@@ -79,7 +79,8 @@ for (const preset of ['coding-leve', 'coding']) {
   const engine = handle.agent.constructor.name
   const route = handle.agent.model?.current()
   const named = route && route.model !== '' ? `${route.provider}/${route.model}` : 'none'
-  out(`preset "${preset}" -> session ${String(id)} created; driver: ${engine}; route: ${named}`)
+  const effort = route?.reasoningEffort ?? 'none'
+  out(`preset "${preset}" -> session ${String(id)} created; driver: ${engine}; route: ${named}; thinking: ${effort}`)
   await handle.dispose()
 }
 

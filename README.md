@@ -139,6 +139,7 @@ linked):
           coding:
             engine: pi        # heavy coding -> the Pi loop
             model: 'minimax/MiniMax-M3.1-Flash'  # the model this preset runs on
+            thinking: 'high'  # the thinking level it runs on
           coding-leve:
             engine: vibe     # light coding -> the Mistral Vibe loop
             model: 'mistral-large-4'
@@ -159,6 +160,10 @@ A preset names the engine, and optionally the model its sessions run on:
 `{ engine: pi, model: 'zai/glm-5.3-flash' }`. The model belongs to the
 preset, so the route travels with the preset's decision; the engine's own
 `model:` stays the default for a preset that names none.
+
+A preset may also name the `thinking` level its sessions run on. The
+level is Pi's: a Vibe session has no such setting, so a Vibe preset's
+thinking is ignored.
 
 The presets themselves compose the delegation tool that runs the *other*
 engine in the background — that is the parallel path: a session on one loop

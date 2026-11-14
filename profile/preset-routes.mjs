@@ -16,6 +16,7 @@
  *   research:
  *     engine: pi
  *     model: 'zai/glm-5.3-flash' # the model this preset runs on
+ *     thinking: 'high'            # the thinking level it runs on
  * ```
  */
 
@@ -32,13 +33,19 @@ export function resolvePreset(preset, presets, fallback) {
   const entry = preset === undefined || preset === null || preset === ''
     ? undefined
     : presets?.[preset]
-  if (entry === undefined || entry === null) return { engine: fallback, model: undefined }
+  if (entry === undefined || entry === null) {
+    return { engine: fallback, model: undefined, thinking: undefined }
+  }
   if (typeof entry === 'string') {
-    return { engine: entry === 'pi' ? 'pi' : 'vibe', model: undefined }
+    return { engine: entry === 'pi' ? 'pi' : 'vibe', model: undefined, thinking: undefined }
   }
   const engine = entry.engine === 'pi' ? 'pi' : entry.engine === 'vibe' ? 'vibe' : fallback
   const model = typeof entry.model === 'string' && entry.model !== '' ? entry.model : undefined
-  return { engine, model }
+  // The thinking level is Pi's: a Vibe session has no such setting.
+  const thinking = engine === 'pi' && typeof entry.thinking === 'string' && entry.thinking !== ''
+    ? entry.thinking
+    : undefined
+  return { engine, model, thinking }
 }
 
 /**
