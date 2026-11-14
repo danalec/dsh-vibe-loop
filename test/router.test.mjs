@@ -43,10 +43,10 @@ test('an empty model is no model', () => {
 })
 
 test('a preset names the thinking level its sessions run on', () => {
-  const routes = { coding: { engine: 'pi', model: 'minimax/MiniMax-M3.1-Flash', thinking: 'high' } }
+  const routes = { coding: { engine: 'pi', model: 'anthropic/claude-sonnet-4-5', thinking: 'high' } }
   assert.deepEqual(resolvePreset('coding', routes, 'pi'), {
     engine: 'pi',
-    model: 'minimax/MiniMax-M3.1-Flash',
+    model: 'anthropic/claude-sonnet-4-5',
     thinking: 'high',
   })
 })

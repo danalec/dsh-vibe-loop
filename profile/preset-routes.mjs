@@ -15,7 +15,7 @@
  *     engine: vibe
  *   research:
  *     engine: pi
- *     model: 'zai/glm-5.3-flash' # the model this preset runs on
+ *     model: 'anthropic/claude-sonnet-4-5' # the model this preset runs on
  *     thinking: 'high'            # the thinking level it runs on
  * ```
  */

@@ -138,7 +138,7 @@ linked):
         presets:
           coding:
             engine: pi        # heavy coding -> the Pi loop
-            model: 'minimax/MiniMax-M3.1-Flash'  # the model this preset runs on
+            model: 'anthropic/claude-sonnet-4-5'  # the model this preset runs on
             thinking: 'high'  # the thinking level it runs on
           coding-leve:
             engine: vibe     # light coding -> the Mistral Vibe loop
@@ -146,7 +146,7 @@ linked):
         default: vibe
         pi:
           piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd'
-          model: 'minimax/MiniMax-M3.1-Flash-Preview'
+          model: 'anthropic/claude-sonnet-4-5'
           pinModel: true
         vibe:
           vibePath: 'C:\\Users\\danalec\\AppData\\Local\\Microsoft\\WinGet\\Links\\vibe-acp.exe'

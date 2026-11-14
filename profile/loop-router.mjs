@@ -46,7 +46,7 @@
  *         default: pi
  *         pi:
  *           piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd'
- *           model: 'minimax/MiniMax-M3.1-Flash'
+ *           model: 'anthropic/claude-sonnet-4-5'
  *         vibe:
  *           vibePath: 'C:\\Users\\danalec\\AppData\\Local\\Microsoft\\WinGet\\Links\\vibe-acp.exe'
  *           model: 'mistral-large-4'
