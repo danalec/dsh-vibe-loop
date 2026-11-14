@@ -40,20 +40,18 @@ await ctx.plugin({
   apply: router.apply,
 }, {
   presets: {
-    coding: { engine: 'pi', model: 'anthropic/claude-sonnet-4-5', thinking: 'high' },
-    'coding-leve': { engine: 'vibe', model: 'mistral-large-4' },
+    coding: { engine: 'pi' },
+    'coding-leve': { engine: 'vibe' },
   },
   default: 'vibe',
   pi: {
     piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd',
     cwd: 'C:\\Users\\danalec',
-    model: 'anthropic/claude-sonnet-4-5',
     pinModel: true,
   },
   vibe: {
     vibePath: 'C:\\Users\\danalec\\AppData\\Local\\Microsoft\\WinGet\\Links\\vibe-acp.exe',
     cwd: 'C:\\Users\\danalec',
-    model: 'mistral-large-4',
     pinModel: true,
     permission: 'dsh',
     mode: 'ask',
