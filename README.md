@@ -136,8 +136,12 @@ linked):
       name: 'file:///C:/Users/danalec/.dsh/profiles/desktop/dsh/loop-router.mjs'
       config:
         presets:
-          coding: pi          # heavy coding -> the Pi loop
-          coding-leve: vibe   # light coding -> the Mistral Vibe loop
+          coding:
+            engine: pi        # heavy coding -> the Pi loop
+            model: 'minimax/MiniMax-M3.1-Flash'  # the model this preset runs on
+          coding-leve:
+            engine: vibe     # light coding -> the Mistral Vibe loop
+            model: 'mistral-large-4'
         default: vibe
         pi:
           piPath: 'C:\\Users\\danalec\\.pi\\agent\\bin\\pi.cmd'
@@ -150,6 +154,11 @@ linked):
           permission: 'dsh'
           mode: 'ask'
 ```
+
+A preset names the engine, and optionally the model its sessions run on:
+`{ engine: pi, model: 'zai/glm-5.3-flash' }`. The model belongs to the
+preset, so the route travels with the preset's decision; the engine's own
+`model:` stays the default for a preset that names none.
 
 The presets themselves compose the delegation tool that runs the *other*
 engine in the background — that is the parallel path: a session on one loop
@@ -281,7 +290,7 @@ already exists:
 | `vibeArgs` | `string[]` | `[]` | Extra arguments passed to the executable |
 | `cwd` | `string` | `process.cwd()` | Working directory for Vibe sessions (a session's own `cwd` wins) |
 | `model` | `string` | — | Vibe model id (for example `mistral-large-4`) |
-| `pinModel` | `boolean` | `false` | Always use `model`, ignoring the route DSH requests for a session |
+| `pinModel` | `boolean` | `true` | Always use `model`, ignoring the route the session asks for. The Vibe agent has a model of its own: the session's own model selection is the session's record and never reaches the child |
 | `permission` | `'dsh' \| 'allow-once' \| 'deny'` | `'dsh'` | How Vibe's tool permission requests are answered: through DSH's own approval chain, once per call, or refused. A standing grant is never given |
 | `mode` | `'ask' \| 'accept-edits' \| 'smart-approve' \| 'auto-approve'` | `'ask'` | The Vibe session mode. `ask` is what lets the approval chain decide; Vibe's own default (`accept-edits`) would approve file edits behind DSH's back |
 | `debug` | `boolean` | `false` | Append protocol diagnostics to `<tmpdir>/dsh-vibe-loop.log` |
