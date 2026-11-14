@@ -79,6 +79,14 @@ export class VibeModel implements Model {
      * reporting a choice that was never applied.
      */
     private readonly pinned: boolean = true,
+    /**
+     * Applies a selection to the Vibe session.
+     *
+     * A session that owns its route (the plugin does not pin one) hands the
+     * choice to the session: a recorded selection that never reaches it
+     * would be a lie in the log.
+     */
+    private readonly applyRoute?: (model: string) => void,
   ) {
     this.state = foldModelState(session)
   }
@@ -102,6 +110,8 @@ export class VibeModel implements Model {
     if (sameModelSelection(this.state.pending ?? this.state.lastUsed, next)) return
     const event = this.session.append('model/selection', next)
     this.state = { ...this.state, pending: event.data }
+    // A session that owns its route hands the choice to the Vibe session.
+    if (!this.pinned) this.applyRoute?.(next.model)
   }
 
   /** The route the Vibe session runs on: the agent's own. */

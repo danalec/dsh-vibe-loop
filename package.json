@@ -1,6 +1,6 @@
 {
   "name": "dsh-vibe-loop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run the Mistral Vibe agent (vibe-acp, Agent Client Protocol) as the agent loop inside DeepSeek Harness (@deepseek-ai/dsh): drive vibe-acp from the official DSH web UI, with the session log, hooks and presets unchanged.",
   "type": "module",
   "main": "dist/index.js",

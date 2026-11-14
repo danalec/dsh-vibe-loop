@@ -305,7 +305,7 @@ export class VibeAgentFactory implements AgentFactory {
     if (recorded !== null) {
       return resolveVibeRoute(this.options.model, { provider: recorded.provider, model: recorded.model })
     }
-    return resolveVibeRoute(this.options.model, this.options.pinModel === true ? undefined : requested)
+    return resolveVibeRoute(this.options.model, this.options.pinModel === false ? requested : undefined)
   }
 
   /** Mint the ACP child, build the scoped VibeAgent, and publish the pair. */

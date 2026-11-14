@@ -14,6 +14,7 @@ function createAgent(options = {}) {
     agentOptions: options.agentOptions ?? {},
     acp,
     ...(options.lastTurn === undefined ? {} : { lastTurn: options.lastTurn }),
+    ...(options.pinnedRoute === undefined ? {} : { pinnedRoute: options.pinnedRoute }),
   })
   return { ctx, session, acp, agent }
 }
@@ -231,6 +232,31 @@ test('a model call that returns nothing fails the turn', async () => {
   assert.equal(session.ofType('assistant/message').length, 0, 'no empty answer is recorded')
   assert.equal(session.last('turn/end').data.reason.kind, 'error')
   assert.equal(errors.length, 1, 'the failure is reported at its live boundary')
+  agent.dispose()
+})
+
+test('a session that owns its route hands the choice to the vibe session', async () => {
+  // The plugin does not pin a route, so the session's choice is the Vibe
+  // session's route.
+  const { acp, agent } = createAgent({
+    pinnedRoute: false,
+    acp: {
+      configOptions: [
+        { id: 'model', currentValue: 'mistral-large-4-0-3', options: [{ value: 'mistral-large-4-0-3' }, { value: 'mistral-medium-3' }] },
+      ],
+    },
+  })
+  agent.model.select({ provider: 'mistral', model: 'mistral-medium-3' })
+  await waitFor(() => acp.setOptions.length > 0, 2000, 'the model switch')
+  assert.deepEqual(acp.setOptions[0], { configId: 'model', value: 'mistral-medium-3' })
+  agent.dispose()
+})
+
+test('a pinned route keeps the choice away from the vibe session', async () => {
+  const { acp, agent } = createAgent({ pinnedRoute: true })
+  agent.model.select({ provider: 'mistral', model: 'mistral-medium-3' })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(acp.setOptions.length, 0, 'the session keeps the model it runs on')
   agent.dispose()
 })
 

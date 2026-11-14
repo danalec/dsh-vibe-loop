@@ -355,7 +355,19 @@ export class VibeAgent implements Agent {
     // A pinned route is the agent's own: the Vibe session runs on the model
     // the plugin names, and the facade records that route rather than a
     // choice the child never applied.
-    this.model = new VibeModel(this.session, this.options, options.pinnedRoute ?? true)
+    this.model = new VibeModel(
+      this.session,
+      this.options,
+      options.pinnedRoute ?? true,
+      // A session that owns its route hands the choice to the Vibe session.
+      // The session has a catalog of its own: a model it does not offer is
+      // not applied, and the choice is reported at the live boundary.
+      (model) => {
+        void this.applyModel(model).catch((error: unknown) => {
+          this.dispatch.emit('agent/error', { turn: this.turn, step: this.step, error })
+        })
+      },
+    )
     this.dispatch = agentEvents(options.ctx, this)
     this.unwatch = this.acp.onUpdate((update) => this.onAcpUpdate(update))
     // Vibe asks before it runs a tool. The decision goes through DSH's own
@@ -982,6 +994,25 @@ export class VibeAgent implements Agent {
     return action().catch((error: unknown) => {
       this.logger?.(`[vibe-loop] background action failed: ${String(error)}`)
     })
+  }
+
+  /**
+   * Switch the Vibe session to a model.
+   *
+   * The Vibe session has a catalog of its own: a model it does not offer is
+   * not applied, and the session keeps the model it runs on. The durable
+   * selection still records the choice, so the log and the frontend agree
+   * on what the session was asked to run.
+   *
+   * @param model - the model id to run on.
+   */
+  private async applyModel(model: string): Promise<void> {
+    const option = this.acp.configOptions.find((entry) => entry.id === 'model')
+    const offered = option?.options ?? []
+    if (option !== undefined && !offered.some((entry) => String(entry.value ?? '') === model)) {
+      throw new Error(`the vibe session does not offer the model "${model}"`)
+    }
+    await this.acp.setOption('model', model)
   }
 
   /** Tear down: stop Vibe and unwind the scoped context. */

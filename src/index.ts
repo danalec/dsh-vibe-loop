@@ -202,7 +202,7 @@ export const Config = z.object({
   vibeArgs: z.array(z.string()),
   cwd: z.string(),
   model: z.string(),
-  pinModel: z.boolean(),
+  pinModel: z.boolean().default(true),
   permission: z.union(['dsh', 'allow-once', 'deny']),
   mode: z.union(['ask', 'accept-edits', 'smart-approve', 'auto-approve']),
   historyBudgetBytes: z.number(),
